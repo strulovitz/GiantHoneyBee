@@ -146,6 +146,50 @@ Each level is the same pattern: receive task → split → delegate → combine.
 
 ---
 
+## Resource-Aware Splitting (the "Report Up" Pattern)
+
+### The problem (identified by Nir, 2026-04-08):
+If the RajaBee naively splits work equally between Queens, but Queen A has 500 workers
+and Queen B has 10 workers, Queen B becomes a bottleneck. The system is only as fast
+as the slowest branch.
+
+### The solution: "Report Up"
+Before sending ANY tasks, the RajaBee asks each Queen: "What do you have?"
+
+Each Queen exposes a capabilities endpoint:
+```
+GET /capabilities
+Response: {"total_workers": 50, "models": ["qwen2.5:1.5b"], "avg_response_time": 3.2}
+```
+
+For N-level hierarchies, this aggregates naturally:
+- Workers report capabilities to their Queen
+- Queen aggregates and reports UP to the RajaBee
+- Each level only knows about its DIRECT children
+- Aggregate numbers (total workers, total power) bubble up
+
+The RajaBee then splits work PROPORTIONALLY:
+- Queen A has 90% of workers → gets 90% of the work
+- Queen B has 10% of workers → gets 10% of the work
+
+### Why NOT a central registry?
+A central database that knows all workers would be a single point of failure.
+It destroys the resilience that makes our system valuable. Rejected.
+
+### Why NOT "plans within plans" (top-down planning)?
+The RajaBee would need to understand every worker at every level — too much
+knowledge for one node. And if anything changes (worker goes offline), the
+entire plan breaks. Rejected.
+
+### Sequential tasks (socks-then-shoes problem):
+Some tasks cannot be split into independent pieces. This is handled in the
+PROMPT, not in the architecture. The splitting prompt says "split into
+INDEPENDENT pieces." If the model determines the task is inherently sequential,
+it should recognize this and either handle it without delegating, or split
+into sequential phases run one after another (not in parallel).
+
+---
+
 ## What We Do NOT Change
 
 - queen_bee.py — UNTOUCHED
@@ -172,9 +216,9 @@ Recommended for Phase 1: option (a) — add HoneycombOfAI to path. Clean, no cop
 
 ## Estimated Effort
 
-- queen_http_wrapper.py: ~50 lines
-- raja_bee.py: ~150 lines
+- queen_http_wrapper.py: ~70 lines (includes /process AND /capabilities endpoints)
+- raja_bee.py: ~200 lines (includes resource-aware proportional splitting)
 - demo_raja.py: ~30 lines
-- Total: ~230 lines of new code
+- Total: ~300 lines of new code
 
 This is a one-session job for Sonnet 4.6.
