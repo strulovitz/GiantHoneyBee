@@ -99,30 +99,48 @@ class WorkerClient:
         return True
 
     def _main_loop(self):
-        """Poll KillerBee for available subtasks and process them."""
+        """Poll KillerBee for work: assigned tasks first, then available subtasks."""
         while True:
             try:
-                subtasks = self.kb.get_available_subtasks(self.swarm_id)
-                if subtasks:
-                    # Try to claim the first available subtask
-                    for subtask in subtasks:
-                        st_id = subtask.get("id") or subtask.get("component_id")
-                        task = subtask.get("task", "")
-                        original_task = subtask.get("original_task", task)
+                found_work = False
 
-                        # Try to claim it (another Worker might get it first)
-                        try:
-                            self.kb.claim_component(st_id, self.member_id)
-                            print(f"\n  [SUBTASK {st_id}] Claimed: "
-                                  f"{task[:80]}...")
-                            self._process_subtask(st_id, task, original_task)
-                            break  # Process one at a time
-                        except Exception as e:
-                            # Another Worker probably claimed it first
-                            print(f"  [SUBTASK {st_id}] Could not claim: {e}")
-                            continue
-                else:
-                    print(f"  Polling... no available subtasks. "
+                # First: check for tasks assigned DIRECTLY to me
+                # (includes calibration tasks from my boss)
+                my_work = self.kb.get_my_work(self.member_id)
+                if my_work:
+                    for task_item in my_work:
+                        t_id = task_item.get("id") or task_item.get("component_id")
+                        task = task_item.get("task", "")
+                        original_task = task_item.get("original_task", task)
+                        comp_type = task_item.get("component_type", "subtask")
+                        print(f"\n  [TASK {t_id}] Assigned to me ({comp_type}): "
+                              f"{task[:80]}...")
+                        self._process_subtask(t_id, task, original_task)
+                        found_work = True
+                        break  # One at a time
+
+                # Second: check for unclaimed subtasks
+                if not found_work:
+                    subtasks = self.kb.get_available_subtasks(self.swarm_id)
+                    if subtasks:
+                        for subtask in subtasks:
+                            st_id = subtask.get("id") or subtask.get("component_id")
+                            task = subtask.get("task", "")
+                            original_task = subtask.get("original_task", task)
+
+                            try:
+                                self.kb.claim_component(st_id, self.member_id)
+                                print(f"\n  [SUBTASK {st_id}] Claimed: "
+                                      f"{task[:80]}...")
+                                self._process_subtask(st_id, task, original_task)
+                                found_work = True
+                                break  # One at a time
+                            except Exception as e:
+                                print(f"  [SUBTASK {st_id}] Could not claim: {e}")
+                                continue
+
+                if not found_work:
+                    print(f"  Polling... no work available. "
                           f"(completed: {self.tasks_completed}, "
                           f"waiting {self.poll_interval}s)", end="\r")
             except Exception as e:
