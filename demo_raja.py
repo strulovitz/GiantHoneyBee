@@ -5,11 +5,11 @@ Tests the hierarchical hive on a single machine using different ports.
 
 Before running this demo:
 1. Make sure Ollama is running with a small model (e.g., qwen2.5:1.5b)
-2. Start Queen 1: python queen_http_wrapper.py --port 5000 --model qwen2.5:1.5b --workers 1
-3. Start Queen 2: python queen_http_wrapper.py --port 5001 --model qwen2.5:1.5b --workers 1
+2. Start DwarfQueen 1: python queen_http_wrapper.py --port 5000 --model qwen2.5:1.5b --workers 1
+3. Start DwarfQueen 2: python queen_http_wrapper.py --port 5001 --model qwen2.5:1.5b --workers 1
 4. Run this demo: python demo_raja.py
 
-The RajaBee will connect to both Queens, split the task, delegate, and combine.
+The RajaBee will connect to both DwarfQueens, split the task, delegate, and combine.
 """
 
 import sys
@@ -23,25 +23,25 @@ from raja_bee import RajaBee
 
 
 def main():
-    # Default Queen endpoints for localhost testing
-    queen_endpoints = [
+    # Default DwarfQueen endpoints for localhost testing
+    dwarf_queen_endpoints = [
         "http://localhost:5000",
         "http://localhost:5001",
     ]
 
     # Allow custom endpoints via command line
     if len(sys.argv) > 1:
-        queen_endpoints = sys.argv[1].split(',')
+        dwarf_queen_endpoints = sys.argv[1].split(',')
 
     # Create the RajaBee
     raja = RajaBee(
         model_name="llama3.2:3b",
-        queen_endpoints=queen_endpoints
+        giant_queen_endpoints=dwarf_queen_endpoints
     )
 
-    # Start and discover Queens
+    # Start and discover DwarfQueens
     if not raja.start():
-        print("\nNo Queens available. Make sure to start Queen HTTP wrappers first!")
+        print("\nNo DwarfQueens available. Make sure to start DwarfQueen HTTP wrappers first!")
         print("Example:")
         print("  Terminal 1: python queen_http_wrapper.py --port 5000 --model qwen2.5:1.5b --workers 1")
         print("  Terminal 2: python queen_http_wrapper.py --port 5001 --model qwen2.5:1.5b --workers 1")

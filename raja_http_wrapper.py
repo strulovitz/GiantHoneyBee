@@ -1,16 +1,20 @@
 """
-Raja HTTP Wrapper — Expose a RajaBee as an HTTP endpoint for N-level nesting
-=============================================================================
+GiantQueen HTTP Wrapper — Expose a RajaBee as an HTTP endpoint for N-level nesting
+====================================================================================
+Named after Apis dorsata (Giant Honey Bee). A GiantQueen is a mid/upper-level
+coordinator that does NOT have Workers directly — she coordinates DwarfQueens
+(or other GiantQueens for deeper hierarchies).
+
 This wrapper turns a RajaBee into an HTTP service that looks IDENTICAL to a
-Queen HTTP wrapper. A higher-level RajaBee can call it via the same /process
+DwarfQueen HTTP wrapper. A higher-level RajaBee can call it via the same /process
 and /capabilities endpoints, without knowing there's an entire hierarchy inside.
 
 This is what makes N-level hierarchies possible:
-    Level 3 RajaBee → calls Level 2 RajaBee (via this wrapper) → calls Queens → Workers
+    Level 3 RajaBee → calls GiantQueen (RajaBee via this wrapper) → calls DwarfQueens → Workers
 
 Endpoints:
     POST /process      — Send a task, get Royal Honey back
-    GET  /capabilities — Report total workers across ALL nested Queens
+    GET  /capabilities — Report total workers across ALL nested DwarfQueens
     GET  /health       — Simple health check
 """
 
@@ -54,9 +58,9 @@ def process_task():
 
 @app.route('/capabilities', methods=['GET'])
 def capabilities():
-    """Report total capabilities across ALL Queens under this RajaBee."""
+    """Report total capabilities across ALL GiantQueens/DwarfQueens under this RajaBee."""
     total_workers = sum(
-        c.get('total_workers', 1) for c in raja.queen_capabilities.values()
+        c.get('total_workers', 1) for c in raja.giant_queen_capabilities.values()
     )
     avg_time = 0.0
     if raja_stats["tasks_completed"] > 0:
@@ -65,10 +69,10 @@ def capabilities():
     return jsonify({
         "total_workers": total_workers,
         "model": raja.model_name,
-        "queens": len(raja.queen_capabilities),
+        "giant_queens": len(raja.giant_queen_capabilities),
         "tasks_completed": raja_stats["tasks_completed"],
         "avg_response_time": round(avg_time, 2),
-        "type": "raja"  # So higher levels know this is a RajaBee, not a single Queen
+        "type": "giant_queen"  # So higher levels know this is a GiantQueen (RajaBee inside), not a DwarfQueen
     })
 
 
@@ -77,10 +81,10 @@ def health():
     """Simple health check."""
     return jsonify({
         "status": "alive",
-        "type": "raja",
-        "queens": len(raja.queen_capabilities),
+        "type": "giant_queen",
+        "giant_queens": len(raja.giant_queen_capabilities),
         "total_workers": sum(
-            c.get('total_workers', 1) for c in raja.queen_capabilities.values()
+            c.get('total_workers', 1) for c in raja.giant_queen_capabilities.values()
         )
     })
 
@@ -88,34 +92,34 @@ def health():
 def main():
     global raja
 
-    parser = argparse.ArgumentParser(description="Raja HTTP Wrapper — expose a RajaBee as HTTP for N-level nesting")
+    parser = argparse.ArgumentParser(description="GiantQueen HTTP Wrapper — expose a RajaBee as HTTP for N-level nesting")
     parser.add_argument('--port', type=int, default=6000, help='Port to listen on (default: 6000)')
-    parser.add_argument('--model', type=str, default='llama3.2:3b', help='Ollama model for this RajaBee')
-    parser.add_argument('--queens', type=str, required=True,
-                        help='Comma-separated Queen/Raja endpoints (e.g., http://localhost:5000,http://localhost:5001)')
+    parser.add_argument('--model', type=str, default='llama3.2:3b', help='Ollama model for this RajaBee/GiantQueen')
+    parser.add_argument('--dwarf-queens', type=str, required=True,
+                        help='Comma-separated DwarfQueen/GiantQueen endpoints (e.g., http://localhost:5000,http://localhost:5001)')
     parser.add_argument('--ollama-url', type=str, default='http://localhost:11434', help='Ollama API URL')
     args = parser.parse_args()
 
-    queen_endpoints = [e.strip() for e in args.queens.split(',')]
+    dwarf_queen_endpoints = [e.strip() for e in args.dwarf_queens.split(',')]
 
-    # Create and start the RajaBee
+    # Create and start the RajaBee (which appears as a GiantQueen to higher levels)
     raja = RajaBee(
         model_name=args.model,
         ollama_url=args.ollama_url,
-        queen_endpoints=queen_endpoints
+        giant_queen_endpoints=dwarf_queen_endpoints
     )
 
     if not raja.start():
-        print("Failed to start RajaBee. No Queens available!")
+        print("Failed to start GiantQueen. No DwarfQueens available!")
         sys.exit(1)
 
-    total_workers = sum(c.get('total_workers', 1) for c in raja.queen_capabilities.values())
+    total_workers = sum(c.get('total_workers', 1) for c in raja.giant_queen_capabilities.values())
 
     print(f"\n{'='*60}")
-    print(f"  Raja HTTP Wrapper running on port {args.port}")
+    print(f"  GiantQueen HTTP Wrapper running on port {args.port}")
     print(f"  Model: {args.model}")
-    print(f"  Queens: {len(raja.queen_capabilities)}")
-    print(f"  Total workers (across all Queens): {total_workers}")
+    print(f"  DwarfQueens: {len(raja.giant_queen_capabilities)}")
+    print(f"  Total workers (across all DwarfQueens): {total_workers}")
     print(f"  Endpoints:")
     print(f"    POST http://localhost:{args.port}/process")
     print(f"    GET  http://localhost:{args.port}/capabilities")

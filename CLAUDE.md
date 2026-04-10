@@ -11,8 +11,8 @@ If something is supposed to communicate over a network, it must communicate over
 Faking the architecture to pass a test faster is REWARD HACKING. It produces results that look correct but prove nothing. It wastes the user's time by creating false confidence.
 
 ### What this means concretely:
-- Workers are SEPARATE MACHINES. They connect to Queens over the network via the BeehiveOfAI website API. They are NEVER in-process Python objects pretending to be machines.
-- Queens are SEPARATE MACHINES. They connect to RajaBees over HTTP.
+- Workers are SEPARATE MACHINES. They connect to DwarfQueens over the network via the BeehiveOfAI website API. They are NEVER in-process Python objects pretending to be machines.
+- DwarfQueens and GiantQueens are SEPARATE MACHINES. They connect to RajaBees over HTTP.
 - If a test requires 6 machines, use 6 machines (or 6 VMs). Do NOT run everything in one process on one machine and call it "distributed."
 
 ### If the real implementation is hard:
