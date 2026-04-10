@@ -164,7 +164,7 @@ class GiantQueenClient:
         # Step 5: Combine results
         print(f"  [COMPONENT {component_id}] Combining "
               f"{len(child_results)} results...")
-        combined = self._combine_results(task, child_results)
+        combined = self._combine_results(task, original_task, child_results)
 
         processing_time = time.time() - start_time
 
@@ -253,7 +253,7 @@ Your JSON array:"""
         print(f"  [COMPONENT {component_id}] [TIMEOUT] Waited {max_wait}s")
         return []
 
-    def _combine_results(self, original_task: str,
+    def _combine_results(self, component_task: str, original_task: str,
                          child_results: list) -> str:
         """Use local Ollama to combine child results."""
         formatted = ""
@@ -267,12 +267,15 @@ Your JSON array:"""
 
         prompt = f"""You are an editor combining results from {len(child_results)} teams into one coherent document.
 
-The original task was: {original_task}
+ORIGINAL QUESTION (what the user actually asked): {original_task}
 
-Here are the sections:
+YOUR SPECIFIC COMPONENT was: {component_task}
+
+Here are the sections from your teams:
 {formatted}
 
-Combine into ONE well-organized document. Integrate smoothly, remove redundancy, keep all important details.
+Combine into ONE well-organized document that answers YOUR COMPONENT in the context of the ORIGINAL QUESTION.
+Stay focused on what was actually asked. Integrate smoothly, remove redundancy, keep all important details.
 
 Your combined document:"""
 

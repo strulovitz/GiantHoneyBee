@@ -184,7 +184,7 @@ class DwarfQueenClient:
         # Step 5: Combine results
         print(f"  [COMPONENT {component_id}] Combining "
               f"{len(child_results)} Worker results...")
-        combined = self._combine_results(task, child_results)
+        combined = self._combine_results(task, original_task, child_results)
 
         processing_time = time.time() - start_time
 
@@ -273,7 +273,7 @@ Your JSON array:"""
         print(f"  [COMPONENT {component_id}] [TIMEOUT] Waited {max_wait}s")
         return []
 
-    def _combine_results(self, original_task: str,
+    def _combine_results(self, component_task: str, original_task: str,
                          child_results: list) -> str:
         """Use local Ollama to combine Worker results."""
         formatted = ""
@@ -285,12 +285,15 @@ Your JSON array:"""
 
         prompt = f"""You are combining results from {len(child_results)} workers into one coherent answer.
 
-The original task was: {original_task}
+ORIGINAL QUESTION (what the user actually asked): {original_task}
+
+YOUR SPECIFIC COMPONENT was: {component_task}
 
 Worker results:
 {formatted}
 
-Combine into ONE clear, complete answer. Integrate smoothly, remove redundancy, keep all important details.
+Combine into ONE clear, complete answer that addresses YOUR COMPONENT in the context of the ORIGINAL QUESTION.
+Stay focused on what was actually asked. Integrate smoothly, remove redundancy, keep all important details.
 
 Your combined answer:"""
 
