@@ -157,6 +157,47 @@ class KillerBeeClient:
         data = self._request("GET", f"/api/swarm/{swarm_id}/components/available")
         return data if isinstance(data, list) else data.get("components", [])
 
+    # ── Buzzing (Performance Calibration) ────────────────────────────
+
+    def get_subordinates(self, member_id: int) -> list:
+        """Get list of subordinates for a member."""
+        data = self._request("GET", f"/api/member/{member_id}/subordinates")
+        return data if isinstance(data, list) else data.get("subordinates", [])
+
+    def get_unassigned_members(self, swarm_id: int, member_type: str) -> list:
+        """Get unassigned members of a given type in a swarm."""
+        data = self._request(
+            "GET", f"/api/swarm/{swarm_id}/unassigned",
+            params={"type": member_type}
+        )
+        return data if isinstance(data, list) else data.get("members", [])
+
+    def claim_subordinate(self, member_id: int,
+                          subordinate_member_id: int) -> dict:
+        """Claim an unassigned member as a subordinate."""
+        return self._request("POST", f"/api/member/{member_id}/claim-subordinate", {
+            "subordinate_member_id": subordinate_member_id
+        })
+
+    def report_buzzing(self, member_id: int, buzzing_speed: float,
+                       buzzing_quality: float,
+                       reporter_member_id: int) -> dict:
+        """Report buzzing scores for a subordinate."""
+        return self._request("POST", f"/api/member/{member_id}/buzzing", {
+            "buzzing_speed": buzzing_speed,
+            "buzzing_quality": buzzing_quality,
+            "reporter_member_id": reporter_member_id
+        })
+
+    def recalculate_member(self, member_id: int) -> dict:
+        """Recalculate capacity and fractions for a member."""
+        return self._request("POST", f"/api/member/{member_id}/recalculate")
+
+    def get_fractions(self, member_id: int) -> dict:
+        """Get subordinates with their fractions for splitting work."""
+        data = self._request("GET", f"/api/member/{member_id}/fractions")
+        return data
+
     # ── Heartbeat ─────────────────────────────────────────────────────
 
     def heartbeat(self, swarm_id: int, member_id: int,

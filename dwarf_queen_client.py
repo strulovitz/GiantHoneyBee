@@ -25,6 +25,7 @@ Hierarchy: RajaBee -> GiantQueens -> DwarfQueens -> Workers
 import sys
 import os
 import time
+import json
 import argparse
 
 # Add HoneycombOfAI to path for AI backend
@@ -61,6 +62,10 @@ class DwarfQueenClient:
         self.poll_interval = poll_interval
         self.member_id = None
 
+        # Buzzing system: subordinates and their fractions
+        self.subordinates = []   # list of subordinate dicts from KillerBee
+        self.fractions = []      # list of {member_id, name, fraction} dicts
+
         self.kb = KillerBeeClient(server_url, username, password)
         self.ai = OllamaClient(base_url=ollama_url)
 
@@ -94,9 +99,224 @@ class DwarfQueenClient:
             print(f"  [WARN] Registration: {e}")
             self.member_id = self.kb.user_id
 
+        # ── Buzzing: Discover, Calibrate, Get Fractions ──────────────
+        print_banner("BUZZING: Discovering & Calibrating Subordinates")
+        self._discover_and_claim_subordinates("worker")
+        if self.subordinates:
+            self._run_calibration()
+            self._fetch_fractions()
+        else:
+            print("  [BUZZING] No subordinates found. "
+                  "Will use default equal splitting.")
+        # ─────────────────────────────────────────────────────────────
+
         print_banner("DwarfQueen is RUNNING. Polling for work...")
         self._main_loop()
         return True
+
+    # ── Buzzing: Discovery, Calibration, Fractions ─────────────────
+
+    def _discover_and_claim_subordinates(self, subordinate_type: str):
+        """Find unassigned members and claim them. Also load existing."""
+        try:
+            existing = self.kb.get_subordinates(self.member_id)
+            if existing:
+                print(f"  [BUZZING] Found {len(existing)} existing "
+                      f"subordinate(s)")
+                for sub in existing:
+                    sub_id = sub.get("member_id") or sub.get("id")
+                    sub_name = sub.get("username", f"member-{sub_id}")
+                    print(f"    - {sub_name} (member_id={sub_id})")
+                self.subordinates = existing
+        except Exception as e:
+            print(f"  [BUZZING] Could not fetch existing subordinates: {e}")
+
+        try:
+            unassigned = self.kb.get_unassigned_members(
+                self.swarm_id, subordinate_type
+            )
+            if unassigned:
+                print(f"  [BUZZING] Found {len(unassigned)} unassigned "
+                      f"{subordinate_type}(s) to claim")
+                for member in unassigned:
+                    m_id = member.get("member_id") or member.get("id")
+                    m_name = member.get("username", f"member-{m_id}")
+                    try:
+                        self.kb.claim_subordinate(self.member_id, m_id)
+                        print(f"    - Claimed {m_name} (member_id={m_id})")
+                        self.subordinates.append(member)
+                    except Exception as e:
+                        print(f"    - Failed to claim {m_name}: {e}")
+            else:
+                print(f"  [BUZZING] No unassigned {subordinate_type}s found")
+        except Exception as e:
+            print(f"  [BUZZING] Could not fetch unassigned members: {e}")
+
+        print(f"  [BUZZING] Total subordinates: {len(self.subordinates)}")
+
+    def _run_calibration(self):
+        """Generate a test, send to all subordinates, score them."""
+        print_banner("BUZZING: Running Calibration Test", char="-")
+
+        print("  [BUZZING] Generating calibration test question...")
+        test_question = self.ai.ask(
+            prompt=("Generate a short test question that requires a detailed "
+                    "2-paragraph answer about any topic. Just output the "
+                    "question, nothing else."),
+            model=self.model_name,
+            temperature=0.7
+        ).strip()
+        print(f"  [BUZZING] Calibration question: {test_question[:100]}...")
+
+        calibration_tasks = {}
+        for sub in self.subordinates:
+            sub_id = sub.get("member_id") or sub.get("id")
+            sub_name = sub.get("username", f"member-{sub_id}")
+            try:
+                cal_data = self.kb._request(
+                    "POST", f"/api/member/{sub_id}/calibration", {
+                        "task": test_question,
+                        "component_type": "calibration"
+                    }
+                )
+                comp_id = cal_data.get("component_id") or cal_data.get("id")
+                calibration_tasks[sub_id] = {
+                    "component_id": comp_id,
+                    "name": sub_name,
+                    "start_time": time.time()
+                }
+                print(f"  [BUZZING] Sent calibration to {sub_name} "
+                      f"(component_id={comp_id})")
+            except Exception as e:
+                print(f"  [BUZZING] Failed to send calibration to "
+                      f"{sub_name}: {e}")
+
+        if not calibration_tasks:
+            print("  [BUZZING] No calibration tasks sent. Skipping.")
+            return
+
+        print("  [BUZZING] Waiting for all subordinates to complete "
+              "calibration...")
+        results = {}
+        max_wait = 600
+        waited = 0
+
+        while waited < max_wait:
+            time.sleep(self.poll_interval)
+            waited += self.poll_interval
+
+            all_done = True
+            for sub_id, cal_info in calibration_tasks.items():
+                if sub_id in results:
+                    continue
+                try:
+                    comp_resp = self.kb._request(
+                        "GET",
+                        f"/api/component/{cal_info['component_id']}/status"
+                    )
+                    if (comp_resp.get("status") == "completed"
+                            and comp_resp.get("result")):
+                        elapsed = time.time() - cal_info["start_time"]
+                        results[sub_id] = {
+                            "result": comp_resp["result"],
+                            "elapsed_time": elapsed,
+                            "name": cal_info["name"]
+                        }
+                        print(f"  [BUZZING] {cal_info['name']} completed "
+                              f"in {elapsed:.1f}s")
+                    else:
+                        all_done = False
+                except Exception as e:
+                    all_done = False
+
+            if all_done:
+                break
+
+            completed = len(results)
+            total = len(calibration_tasks)
+            print(f"  [BUZZING] Waiting... {completed}/{total} done "
+                  f"({waited}s elapsed)", end="\r")
+
+        if not results:
+            print("  [BUZZING] No calibration results received. Skipping.")
+            return
+
+        print_banner("BUZZING: Scoring Subordinates", char="-")
+
+        times = {sid: r["elapsed_time"] for sid, r in results.items()}
+        fastest = min(times.values())
+        slowest = max(times.values())
+
+        for sub_id, r in results.items():
+            elapsed = r["elapsed_time"]
+            if slowest == fastest:
+                speed_score = 10.0
+            else:
+                speed_score = 10.0 - 9.0 * (
+                    (elapsed - fastest) / (slowest - fastest)
+                )
+            speed_score = round(max(1.0, min(10.0, speed_score)), 1)
+
+            quality_prompt = (
+                f"Rate the following answer from 1 to 10 for completeness "
+                f"and accuracy. The question was: \"{test_question}\"\n\n"
+                f"Answer to rate:\n{r['result']}\n\n"
+                f"Reply with ONLY a single number from 1 to 10, nothing else."
+            )
+            quality_text = self.ai.ask(
+                prompt=quality_prompt,
+                model=self.model_name,
+                temperature=0.1
+            ).strip()
+
+            try:
+                quality_score = float(
+                    ''.join(c for c in quality_text if c.isdigit() or c == '.')
+                )
+                quality_score = max(1.0, min(10.0, quality_score))
+            except (ValueError, TypeError):
+                quality_score = 5.0
+
+            quality_score = round(quality_score, 1)
+            buzzing = round(speed_score * quality_score, 1)
+
+            print(f"  [BUZZING] {r['name']}: speed={speed_score}, "
+                  f"quality={quality_score}, buzzing={buzzing}")
+
+            try:
+                self.kb.report_buzzing(
+                    sub_id, speed_score, quality_score, self.member_id
+                )
+                print(f"  [BUZZING] Reported buzzing for {r['name']}")
+            except Exception as e:
+                print(f"  [BUZZING] Failed to report buzzing for "
+                      f"{r['name']}: {e}")
+
+        try:
+            self.kb.recalculate_member(self.member_id)
+            print("  [BUZZING] Recalculated capacity and fractions")
+        except Exception as e:
+            print(f"  [BUZZING] Recalculate failed: {e}")
+
+    def _fetch_fractions(self):
+        """Fetch fractions from KillerBee and store locally."""
+        try:
+            fractions_data = self.kb.get_fractions(self.member_id)
+            self.fractions = fractions_data.get("subordinates", [])
+            if self.fractions:
+                print_banner("BUZZING: Fractions for Splitting", char="-")
+                for f in self.fractions:
+                    name = f.get("username", f.get("name", "unknown"))
+                    frac = f.get("fraction", 0)
+                    print(f"  {name}: {frac:.3f}")
+                print(f"  Total: {sum(f.get('fraction', 0) for f in self.fractions):.3f}")
+            else:
+                print("  [BUZZING] No fractions received. "
+                      "Will use equal splitting.")
+        except Exception as e:
+            print(f"  [BUZZING] Could not fetch fractions: {e}")
+
+    # ── Main Loop ─────────────────────────────────────────────────────
 
     def _main_loop(self):
         """Poll KillerBee for available components to claim and process."""
@@ -200,9 +420,53 @@ class DwarfQueenClient:
                   f"Failed to post result: {e}")
 
     def _split_into_subtasks(self, task: str, original_task: str = "") -> list:
-        """Use local Ollama to split a component into subtasks for Workers."""
+        """Use local Ollama to split a component into subtasks for Workers.
+
+        If fractions are available from Buzzing calibration, the number of
+        subtasks matches the number of Workers, and each is sized
+        proportionally by fraction.
+        """
         original_task = original_task or task
-        prompt = f"""You are a team lead splitting a task into 2-4 small, specific subtasks that individual workers can complete independently.
+        num_workers = len(self.fractions) if self.fractions else None
+
+        if num_workers and num_workers >= 2:
+            fraction_lines = []
+            for i, f in enumerate(self.fractions):
+                name = f.get("username", f.get("name", f"Worker {i+1}"))
+                frac = f.get("fraction", round(1.0 / num_workers, 2))
+                fraction_lines.append(
+                    f"Subtask {i+1} should cover about {frac:.2f} "
+                    f"of the total work (for {name})"
+                )
+            fraction_instructions = "\n".join(fraction_lines)
+
+            prompt = f"""You are a team lead splitting a task into exactly {num_workers} small, specific subtasks that individual workers can complete independently.
+
+CRITICAL CONTEXT: The ORIGINAL QUESTION that started this whole process was:
+"{original_task}"
+
+Your specific component to split into subtasks is: {task}
+
+SIZE EACH SUBTASK PROPORTIONALLY:
+{fraction_instructions}
+
+A subtask with fraction 0.60 should be about 3x as much work as one with fraction 0.20.
+Larger fractions = broader scope. Smaller fractions = narrower, more focused.
+
+RULES:
+- Each subtask must be SMALL and SPECIFIC (a single focused question or action)
+- Each subtask must be INDEPENDENT (worker doesn't need other results)
+- Together they must fully cover YOUR component
+- Every subtask MUST stay relevant to the ORIGINAL QUESTION above
+- Do NOT drift into unrelated topics
+
+The task to split: {task}
+
+Return ONLY a JSON array of exactly {num_workers} strings.
+
+Your JSON array:"""
+        else:
+            prompt = f"""You are a team lead splitting a task into 2-4 small, specific subtasks that individual workers can complete independently.
 
 CRITICAL CONTEXT: The ORIGINAL QUESTION that started this whole process was:
 "{original_task}"
