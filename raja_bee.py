@@ -94,12 +94,24 @@ class RajaBee:
             print(f"\n  [ERROR] Cannot login to KillerBee: {e}")
             return False
 
-        # RajaBee is the swarm owner — no need to register as a member
-        self.member_id = self.kb.user_id
-        print(f"  RajaBee ready (user_id={self.member_id})")
+        # Register as a RajaBee member so we get a proper member_id
+        try:
+            reg_data = self.kb.register_member(
+                self.swarm_id, "raja", self.model_name
+            )
+            self.member_id = reg_data.get("member_id", self.kb.user_id)
+            print(f"  Registered as RajaBee (member_id={self.member_id})")
+        except Exception as e:
+            print(f"  [WARN] Registration: {e}")
+            self.member_id = self.kb.user_id
 
         # ── Buzzing: Discover, Calibrate, Get Fractions ──────────────
+        # Look for GiantQueens first; if none, look for DwarfQueens directly
         self._buzzing_cycle("giant_queen")
+        if not self.subordinates:
+            print("  [BUZZING] No GiantQueens found. Looking for DwarfQueens directly...")
+            self.subordinate_type = "dwarf_queen"
+            self._buzzing_cycle("dwarf_queen")
         # ─────────────────────────────────────────────────────────────
 
         print_banner("RajaBee is RUNNING. Polling for jobs...")
