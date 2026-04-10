@@ -318,9 +318,9 @@ class DwarfQueenClient:
                 print_banner("BUZZING: Fractions for Splitting", char="-")
                 for f in self.fractions:
                     name = f.get("username", f.get("name", "unknown"))
-                    frac = f.get("fraction", 0)
+                    frac = f.get("fraction") or 0
                     print(f"  {name}: {frac:.3f}")
-                print(f"  Total: {sum(f.get('fraction', 0) for f in self.fractions):.3f}")
+                print(f"  Total: {sum((f.get('fraction') or 0) for f in self.fractions):.3f}")
             else:
                 print("  [BUZZING] No fractions received. "
                       "Will use equal splitting.")
