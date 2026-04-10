@@ -68,6 +68,7 @@ class DwarfQueenClient:
         # Buzzing system: subordinates and their fractions
         self.subordinates = []   # list of subordinate dicts from KillerBee
         self.fractions = []      # list of {member_id, name, fraction} dicts
+        self._last_known_capacities = {}  # member_id -> capacity
 
         self.kb = KillerBeeClient(server_url, username, password)
         self.ai = OllamaClient(base_url=ollama_url)
@@ -118,11 +119,38 @@ class DwarfQueenClient:
         old_count = len(self.subordinates)
         self._discover_and_claim_subordinates(subordinate_type)
         if self.subordinates:
+            needs_recalibration = False
+
             if len(self.subordinates) > old_count or not self.fractions:
+                needs_recalibration = True
+                print("  [BUZZING] New subordinates or first calibration.")
+
+            if not needs_recalibration:
+                try:
+                    current_fractions = self.kb.get_fractions(self.member_id)
+                    for sub in current_fractions.get("subordinates", []):
+                        sub_id = sub.get("member_id")
+                        sub_cap = sub.get("capacity") or 0
+                        old_cap = self._last_known_capacities.get(sub_id, sub_cap)
+                        if abs(sub_cap - old_cap) > 0.01:
+                            print(f"  [BUZZING] {sub.get('username', sub_id)}'s "
+                                  f"capacity changed: {old_cap:.1f} -> {sub_cap:.1f}")
+                            needs_recalibration = True
+                            break
+                except Exception:
+                    pass
+
+            if needs_recalibration:
                 self._run_calibration()
                 self._fetch_fractions()
+                try:
+                    current = self.kb.get_fractions(self.member_id)
+                    for sub in current.get("subordinates", []):
+                        self._last_known_capacities[sub.get("member_id")] = sub.get("capacity") or 0
+                except Exception:
+                    pass
             else:
-                print("  [BUZZING] No new subordinates. Fractions unchanged.")
+                print("  [BUZZING] No changes. Fractions unchanged.")
         else:
             print("  [BUZZING] No subordinates found yet. "
                   "Will check again periodically.")
