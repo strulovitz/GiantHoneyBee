@@ -61,6 +61,9 @@ class DwarfQueenClient:
         self.model_name = model_name
         self.poll_interval = poll_interval
         self.member_id = None
+        self.subordinate_type = "worker"
+        self.rediscovery_interval = 10
+        self._poll_count = 0
 
         # Buzzing system: subordinates and their fractions
         self.subordinates = []   # list of subordinate dicts from KillerBee
@@ -100,14 +103,7 @@ class DwarfQueenClient:
             self.member_id = self.kb.user_id
 
         # ── Buzzing: Discover, Calibrate, Get Fractions ──────────────
-        print_banner("BUZZING: Discovering & Calibrating Subordinates")
-        self._discover_and_claim_subordinates("worker")
-        if self.subordinates:
-            self._run_calibration()
-            self._fetch_fractions()
-        else:
-            print("  [BUZZING] No subordinates found. "
-                  "Will use default equal splitting.")
+        self._buzzing_cycle(self.subordinate_type)
         # ─────────────────────────────────────────────────────────────
 
         print_banner("DwarfQueen is RUNNING. Polling for work...")
@@ -115,6 +111,21 @@ class DwarfQueenClient:
         return True
 
     # ── Buzzing: Discovery, Calibration, Fractions ─────────────────
+
+    def _buzzing_cycle(self, subordinate_type: str):
+        """Run full Buzzing cycle: discover, calibrate, get fractions."""
+        print_banner("BUZZING: Discovering & Calibrating Subordinates")
+        old_count = len(self.subordinates)
+        self._discover_and_claim_subordinates(subordinate_type)
+        if self.subordinates:
+            if len(self.subordinates) > old_count or not self.fractions:
+                self._run_calibration()
+                self._fetch_fractions()
+            else:
+                print("  [BUZZING] No new subordinates. Fractions unchanged.")
+        else:
+            print("  [BUZZING] No subordinates found yet. "
+                  "Will check again periodically.")
 
     def _discover_and_claim_subordinates(self, subordinate_type: str):
         """Find unassigned members and claim them. Also load existing."""
@@ -322,6 +333,19 @@ class DwarfQueenClient:
         """Poll KillerBee for available components to claim and process."""
         while True:
             try:
+                # Periodically re-discover subordinates
+                self._poll_count += 1
+                if self._poll_count % self.rediscovery_interval == 0:
+                    self._buzzing_cycle(self.subordinate_type)
+
+                # Don't accept work until we have subordinates
+                if not self.subordinates:
+                    print(f"  Waiting for Workers to join... "
+                          f"(checking every {self.poll_interval}s)", end="\r")
+                    self._buzzing_cycle(self.subordinate_type)
+                    time.sleep(self.poll_interval)
+                    continue
+
                 # First check for work already assigned to us
                 work = self.kb.get_my_work(self.member_id)
                 if work:
@@ -353,7 +377,8 @@ class DwarfQueenClient:
                                 continue
                     else:
                         print(f"  Polling... no work available. "
-                              f"(waiting {self.poll_interval}s)", end="\r")
+                              f"({len(self.subordinates)} Workers, "
+                              f"waiting {self.poll_interval}s)", end="\r")
             except Exception as e:
                 print(f"  [ERROR] Polling failed: {e}")
 

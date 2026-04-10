@@ -57,6 +57,9 @@ class RajaBee:
         self.swarm_id = swarm_id
         self.model_name = model_name
         self.poll_interval = poll_interval
+        self.subordinate_type = "giant_queen"
+        self.rediscovery_interval = 10  # re-check for new subordinates every N poll cycles
+        self._poll_count = 0
         self.member_id = None
 
         # Buzzing system: subordinates and their fractions
@@ -96,14 +99,7 @@ class RajaBee:
         print(f"  RajaBee ready (user_id={self.member_id})")
 
         # ── Buzzing: Discover, Calibrate, Get Fractions ──────────────
-        print_banner("BUZZING: Discovering & Calibrating Subordinates")
-        self._discover_and_claim_subordinates("giant_queen")
-        if self.subordinates:
-            self._run_calibration()
-            self._fetch_fractions()
-        else:
-            print("  [BUZZING] No subordinates found. "
-                  "Will use default equal splitting.")
+        self._buzzing_cycle("giant_queen")
         # ─────────────────────────────────────────────────────────────
 
         print_banner("RajaBee is RUNNING. Polling for jobs...")
@@ -111,6 +107,22 @@ class RajaBee:
         return True
 
     # ── Buzzing: Discovery, Calibration, Fractions ─────────────────
+
+    def _buzzing_cycle(self, subordinate_type: str):
+        """Run full Buzzing cycle: discover, calibrate, get fractions."""
+        print_banner("BUZZING: Discovering & Calibrating Subordinates")
+        old_count = len(self.subordinates)
+        self._discover_and_claim_subordinates(subordinate_type)
+        if self.subordinates:
+            # Only re-calibrate if we found NEW subordinates or never calibrated
+            if len(self.subordinates) > old_count or not self.fractions:
+                self._run_calibration()
+                self._fetch_fractions()
+            else:
+                print("  [BUZZING] No new subordinates. Fractions unchanged.")
+        else:
+            print("  [BUZZING] No subordinates found yet. "
+                  "Will check again periodically.")
 
     def _discover_and_claim_subordinates(self, subordinate_type: str):
         """Find unassigned members and claim them. Also load existing."""
@@ -332,6 +344,20 @@ class RajaBee:
         """Poll KillerBee for pending jobs and process them."""
         while True:
             try:
+                # Periodically re-discover subordinates (new bees may have joined)
+                self._poll_count += 1
+                if self._poll_count % self.rediscovery_interval == 0:
+                    self._buzzing_cycle(self.subordinate_type)
+
+                # Don't accept jobs until we have subordinates
+                if not self.subordinates:
+                    print(f"  Waiting for subordinates to join... "
+                          f"(checking every {self.poll_interval}s)", end="\r")
+                    # Check for new subordinates every cycle while we have none
+                    self._buzzing_cycle(self.subordinate_type)
+                    time.sleep(self.poll_interval)
+                    continue
+
                 jobs = self.kb.get_pending_jobs(self.swarm_id)
                 if jobs:
                     for job in jobs:
@@ -341,7 +367,8 @@ class RajaBee:
                         self._process_job(job_id, task)
                 else:
                     print(f"  Polling... no pending jobs. "
-                          f"(waiting {self.poll_interval}s)", end="\r")
+                          f"({len(self.subordinates)} subordinates, "
+                          f"waiting {self.poll_interval}s)", end="\r")
             except Exception as e:
                 print(f"  [ERROR] Polling failed: {e}")
 
