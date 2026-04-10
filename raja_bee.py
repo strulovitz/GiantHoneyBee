@@ -1,165 +1,180 @@
 """
-RajaBee — The King of the Bees
-===============================
+RajaBee — The King of the Bees (KillerBee API Client)
+======================================================
 Named after Megachile pluto (Wallace's Giant Bee), the largest bee in the world.
-Raja Ofu = "king of the bees" in Indonesian.
 
-The RajaBee coordinates multiple GiantQueens (named after Apis dorsata, the Giant
-Honey Bee). Each GiantQueen is a mid-level coordinator that delegates to DwarfQueens
-(named after Apis florea, the Red Dwarf Honey Bee), who have the actual Workers.
+The RajaBee is the TOP of the hierarchy. It communicates ONLY through the
+KillerBee website API. No direct HTTP to Queens or Workers.
 
-Hierarchy: Worker Bee → DwarfQueen → GiantQueen → RajaBee
+Workflow:
+1. Login to KillerBee
+2. Poll for pending jobs in the swarm
+3. When a job arrives: use local Ollama to split into components
+4. Post components to KillerBee (job split API)
+5. Poll KillerBee until all components have results
+6. Use local Ollama to combine results
+7. Post final result to KillerBee
+
+Hierarchy: RajaBee -> GiantQueens -> DwarfQueens -> Workers
+All communication goes through KillerBee. No direct HTTP between bees.
 """
 
 import sys
 import os
 import time
-import json
-import requests
-import concurrent.futures
+import argparse
 
 # Add HoneycombOfAI to path for AI backend
 HONEYCOMB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'HoneycombOfAI')
 sys.path.insert(0, HONEYCOMB_PATH)
 
 from ollama_client import OllamaClient
+from killerbee_client import KillerBeeClient
 
-try:
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.table import Table
-    console = Console()
-    HAS_RICH = True
-except ImportError:
-    HAS_RICH = False
-    class FakeConsole:
-        def print(self, *args, **kwargs):
-            text = str(args[0]) if args else ""
-            # Strip rich markup for plain output
-            import re
-            clean = re.sub(r'\[.*?\]', '', text)
-            print(clean)
-    console = FakeConsole()
+
+def print_banner(text: str, char: str = "="):
+    line = char * 60
+    print(f"\n{line}")
+    print(f"  {text}")
+    print(f"{line}")
 
 
 class RajaBee:
     """
-    The Raja Bee — King of the Bees.
+    The Raja Bee -- King of the Bees.
 
-    She coordinates multiple GiantQueens, each managing their own sub-hierarchy
-    of DwarfQueens and Workers.
-    She is responsible for:
-    1. Querying GiantQueens for their capabilities (Report Up pattern)
-    2. Splitting a complex task into major components proportionally
-    3. Delegating each component to a GiantQueen (in parallel)
-    4. Combining all GiantQueens' results into one mega-answer (Royal Honey)
+    Connects to KillerBee website, polls for jobs, splits them into
+    components for GiantQueens, waits for results, combines them.
     """
 
-    def __init__(self, model_name: str = "llama3.2:3b",
+    def __init__(self, server_url: str, swarm_id: int,
+                 username: str, password: str,
+                 model_name: str = "llama3.2:3b",
                  ollama_url: str = "http://localhost:11434",
-                 giant_queen_endpoints: list = None,
-                 timeout: int = 600):
+                 poll_interval: int = 5):
+        self.server_url = server_url
+        self.swarm_id = swarm_id
         self.model_name = model_name
-        self.giant_queen_endpoints = giant_queen_endpoints or []
-        self.timeout = timeout
+        self.poll_interval = poll_interval
+        self.member_id = None
+
+        # KillerBee API client (all communication goes through here)
+        self.kb = KillerBeeClient(server_url, username, password)
+
+        # Local Ollama for AI processing (splitting and combining)
         self.ai = OllamaClient(base_url=ollama_url)
-        self.giant_queen_capabilities = {}
 
     def start(self):
-        """Start the RajaBee and verify connections."""
-        if HAS_RICH:
-            console.print(Panel(
-                f"[bold red]👑👑 Raja Bee started! 👑👑[/]\n"
-                f"Model: {self.model_name}\n"
-                f"GiantQueens: {len(self.giant_queen_endpoints)}",
-                title="Raja Bee — King of the Bees",
-                border_style="red"
-            ))
-        else:
-            console.print(f"Raja Bee started! Model: {self.model_name}, GiantQueens: {len(self.giant_queen_endpoints)}")
+        """Login, register, and start the main loop."""
+        print_banner("RajaBee -- King of the Bees")
+        print(f"  Server:    {self.server_url}")
+        print(f"  Swarm:     {self.swarm_id}")
+        print(f"  Model:     {self.model_name}")
+        print(f"  Username:  {self.kb.username}")
 
+        # Check Ollama
         if not self.ai.is_available():
-            console.print(f"  Cannot connect to Ollama! Is it running?")
+            print("\n  [ERROR] Cannot connect to Ollama! Is it running?")
             return False
-        console.print(f"  Connected to {self.ai.backend_name()}")
+        print(f"  Ollama:    Connected ({self.ai.backend_name()})")
 
-        # Query all GiantQueens for capabilities
-        self._discover_giant_queens()
+        # Login to KillerBee
+        try:
+            login_data = self.kb.login()
+            print(f"  KillerBee: Logged in (user_id={self.kb.user_id})")
+        except Exception as e:
+            print(f"\n  [ERROR] Cannot login to KillerBee: {e}")
+            return False
 
-        return len(self.giant_queen_capabilities) > 0
+        # Register as RajaBee
+        try:
+            reg_data = self.kb.register_member(
+                self.swarm_id, "raja", self.model_name
+            )
+            self.member_id = reg_data.get("member_id", self.kb.user_id)
+            print(f"  Registered as RajaBee (member_id={self.member_id})")
+        except Exception as e:
+            print(f"  [WARN] Registration: {e}")
+            self.member_id = self.kb.user_id
 
-    def _discover_giant_queens(self):
-        """Query each GiantQueen for her capabilities (Report Up pattern)."""
-        console.print(f"\n  Discovering GiantQueens...")
-        self.giant_queen_capabilities = {}
+        print_banner("RajaBee is RUNNING. Polling for jobs...")
+        self._main_loop()
+        return True
 
-        for endpoint in self.giant_queen_endpoints:
+    def _main_loop(self):
+        """Poll KillerBee for pending jobs and process them."""
+        while True:
             try:
-                resp = requests.get(f"{endpoint}/capabilities", timeout=10)
-                if resp.status_code == 200:
-                    caps = resp.json()
-                    self.giant_queen_capabilities[endpoint] = caps
-                    console.print(
-                        f"  Found GiantQueen at {endpoint}: "
-                        f"{caps.get('total_workers', '?')} workers, "
-                        f"model: {caps.get('model', '?')}"
-                    )
+                jobs = self.kb.get_pending_jobs(self.swarm_id)
+                if jobs:
+                    for job in jobs:
+                        job_id = job.get("id") or job.get("job_id")
+                        task = job.get("task") or job.get("prompt", "")
+                        print(f"\n  [JOB {job_id}] Received: {task[:80]}...")
+                        self._process_job(job_id, task)
                 else:
-                    console.print(f"  GiantQueen at {endpoint} responded with status {resp.status_code}")
+                    print(f"  Polling... no pending jobs. "
+                          f"(waiting {self.poll_interval}s)", end="\r")
             except Exception as e:
-                console.print(f"  Cannot reach GiantQueen at {endpoint}: {e}")
+                print(f"  [ERROR] Polling failed: {e}")
 
-        if not self.giant_queen_capabilities:
-            console.print(f"  No GiantQueens available!")
-        else:
-            total_workers = sum(c.get('total_workers', 1) for c in self.giant_queen_capabilities.values())
-            console.print(f"  Total: {len(self.giant_queen_capabilities)} GiantQueens, {total_workers} Workers across all hives")
+            time.sleep(self.poll_interval)
 
-    def _calculate_proportions(self):
-        """Calculate work proportions based on GiantQueen capabilities."""
-        total_workers = sum(
-            c.get('total_workers', 1) for c in self.giant_queen_capabilities.values()
-        )
-        proportions = {}
-        for endpoint, caps in self.giant_queen_capabilities.items():
-            workers = caps.get('total_workers', 1)
-            proportions[endpoint] = workers / total_workers if total_workers > 0 else 1.0 / len(self.giant_queen_capabilities)
-        return proportions
+    def _process_job(self, job_id: int, task: str):
+        """Process a single job: split, wait for results, combine."""
+        total_start = time.time()
 
-    def split_task(self, task: str) -> list:
-        """
-        Split a complex task into major components — one per GiantQueen.
+        # Step 1: Use local Ollama to split the task into components
+        print(f"  [JOB {job_id}] Splitting task into components...")
+        components = self._split_task(task)
+        print(f"  [JOB {job_id}] Split into {len(components)} components")
 
-        Unlike a DwarfQueen's split (which creates small subtasks), the RajaBee
-        splits into MAJOR independent components, each substantial enough
-        for an entire sub-hierarchy to work on.
-        """
-        num_giant_queens = len(self.giant_queen_capabilities)
-        proportions = self._calculate_proportions()
+        for i, comp in enumerate(components):
+            print(f"    Component {i+1}: {comp[:70]}...")
 
-        # Build proportion hints for the prompt
-        proportion_hints = ""
-        for i, (endpoint, prop) in enumerate(proportions.items()):
-            caps = self.giant_queen_capabilities[endpoint]
-            workers = caps.get('total_workers', 1)
-            proportion_hints += f"\n- Component {i+1}: should be ~{prop*100:.0f}% of the total work ({workers} workers available)"
+        # Step 2: Post components to KillerBee
+        component_data = [{"task": c} for c in components]
+        try:
+            split_result = self.kb.split_job(job_id, component_data)
+            print(f"  [JOB {job_id}] Components posted to KillerBee")
+        except Exception as e:
+            print(f"  [JOB {job_id}] [ERROR] Failed to post components: {e}")
+            return
 
-        console.print(f"\n  Splitting task into {num_giant_queens} major components...")
+        # Step 3: Poll until all components have results
+        print(f"  [JOB {job_id}] Waiting for GiantQueens to process components...")
+        component_results = self._wait_for_components(job_id, split_result)
 
-        prompt = f"""You are a SENIOR coordinator managing {num_giant_queens} independent teams. Your job is to split one complex task into exactly {num_giant_queens} MAJOR independent components.
+        if not component_results:
+            print(f"  [JOB {job_id}] [ERROR] No component results received")
+            return
 
-IMPORTANT RULES:
-- Each component must be INDEPENDENT — it can be completed without knowing the results of other components
-- Each component should be a SUBSTANTIAL piece of work requiring research and synthesis — NOT a simple single question
-- Components should be PROPORTIONAL to the available resources:
-{proportion_hints}
-- A team with more resources should get a bigger/more complex component
-- Together, all components should fully cover the original task
+        # Step 4: Combine results using local Ollama
+        print(f"  [JOB {job_id}] Combining {len(component_results)} results...")
+        final_result = self._combine_results(task, component_results)
 
-The complex task is: {task}
+        total_time = time.time() - total_start
 
-Return ONLY a JSON array of {num_giant_queens} strings, each describing one major component. Example format:
-["first major component description", "second major component description"]
+        # Step 5: Post final result to KillerBee
+        try:
+            self.kb.post_job_result(job_id, final_result, total_time)
+            print(f"  [JOB {job_id}] COMPLETE! Royal Honey delivered "
+                  f"in {total_time:.1f}s")
+        except Exception as e:
+            print(f"  [JOB {job_id}] [ERROR] Failed to post result: {e}")
+
+    def _split_task(self, task: str) -> list:
+        """Use local Ollama to split a task into major components."""
+        prompt = f"""You are a SENIOR coordinator. Split this complex task into 2-4 MAJOR independent components.
+
+RULES:
+- Each component must be INDEPENDENT (can be completed without other components)
+- Each component should be SUBSTANTIAL (not a simple question)
+- Together, all components must fully cover the original task
+
+The task is: {task}
+
+Return ONLY a JSON array of strings. Example: ["component 1", "component 2"]
 
 Your JSON array:"""
 
@@ -169,176 +184,152 @@ Your JSON array:"""
             temperature=0.3
         )
 
-        # Ensure correct count
-        if len(components) < num_giant_queens:
-            for i in range(len(components), num_giant_queens):
-                components.append(f"Provide additional analysis about: {task} (aspect {i+1})")
-        elif len(components) > num_giant_queens:
-            components = components[:num_giant_queens]
-
-        # Display components
-        if HAS_RICH:
-            table = Table(title="Major Components for GiantQueens", border_style="red")
-            table.add_column("#", style="bold")
-            table.add_column("GiantQueen", style="cyan")
-            table.add_column("Component", style="italic")
-            table.add_column("Workers", style="green")
-            for i, (endpoint, component) in enumerate(zip(self.giant_queen_capabilities.keys(), components)):
-                caps = self.giant_queen_capabilities[endpoint]
-                table.add_row(
-                    str(i + 1),
-                    endpoint.split(":")[-1],
-                    component[:80] + ("..." if len(component) > 80 else ""),
-                    str(caps.get('total_workers', '?'))
-                )
-            console.print(table)
+        if not components or len(components) < 2:
+            # Fallback: treat the whole task as one component
+            components = [task]
 
         return components
 
-    def delegate_to_giant_queens(self, components: list) -> list:
-        """
-        Send each component to a different GiantQueen IN PARALLEL.
-        Each GiantQueen processes it through her own sub-hierarchy (delegating
-        to DwarfQueens, who distribute to Workers, combining results).
-        """
-        endpoints = list(self.giant_queen_capabilities.keys())
-        results = []
-        start_time = time.time()
+    def _wait_for_components(self, job_id: int, split_result: dict) -> list:
+        """Poll KillerBee until all components for this job have results."""
+        # Get component IDs from the split result
+        component_ids = split_result.get("component_ids", [])
 
-        console.print(f"\n  Delegating {len(components)} components to {len(endpoints)} GiantQueens in parallel...")
+        if not component_ids:
+            # If the API doesn't return IDs directly, we poll via
+            # get_children or similar
+            print(f"  [JOB {job_id}] Waiting for results via polling...")
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(endpoints)) as executor:
-            future_to_giant_queen = {}
-            for i, component in enumerate(components):
-                endpoint = endpoints[i]
-                future = executor.submit(self._send_to_giant_queen, endpoint, component)
-                future_to_giant_queen[future] = endpoint
+        max_wait = 3600  # 1 hour max
+        waited = 0
 
-            for future in concurrent.futures.as_completed(future_to_giant_queen):
-                endpoint = future_to_giant_queen[future]
-                try:
-                    result = future.result()
-                    results.append({
-                        "giant_queen": endpoint,
-                        "component": components[endpoints.index(endpoint)],
-                        "result": result["result"],
-                        "time": result.get("time", 0)
-                    })
-                    console.print(f"  GiantQueen {endpoint} completed in {result.get('time', '?')}s")
-                except Exception as e:
-                    results.append({
-                        "giant_queen": endpoint,
-                        "component": components[endpoints.index(endpoint)],
-                        "result": f"[ERROR] {str(e)}",
-                        "time": 0
-                    })
-                    console.print(f"  GiantQueen {endpoint} FAILED: {e}")
+        while waited < max_wait:
+            time.sleep(self.poll_interval)
+            waited += self.poll_interval
 
-        elapsed = time.time() - start_time
-        console.print(f"  All {len(endpoints)} GiantQueens completed in {elapsed:.1f}s total")
+            try:
+                # Check if all components have results
+                all_done = True
+                results = []
 
-        return results
+                if component_ids:
+                    for comp_id in component_ids:
+                        children = self.kb.get_children(comp_id)
+                        # Check if this component itself has a result
+                        # by looking at the component data
+                        comp_data = children  # API may return component info
+                        if isinstance(comp_data, list):
+                            for child in comp_data:
+                                if child.get("result"):
+                                    results.append(child)
+                                else:
+                                    all_done = False
+                        elif isinstance(comp_data, dict):
+                            if comp_data.get("result"):
+                                results.append(comp_data)
+                            else:
+                                all_done = False
+                else:
+                    # Fallback: check job-level for completed components
+                    # Try getting pending jobs to see if this one is done
+                    try:
+                        work = self.kb.get_my_work(self.member_id)
+                        for item in work:
+                            if item.get("job_id") == job_id:
+                                children = item.get("components", [])
+                                for child in children:
+                                    if child.get("result"):
+                                        results.append(child)
+                                    else:
+                                        all_done = False
+                    except Exception:
+                        all_done = False
 
-    def _send_to_giant_queen(self, endpoint: str, task: str) -> dict:
-        """Send a task to a GiantQueen via HTTP and wait for the result."""
-        resp = requests.post(
-            f"{endpoint}/process",
-            json={"task": task},
-            timeout=self.timeout
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        else:
-            raise Exception(f"HTTP {resp.status_code}: {resp.text}")
+                if all_done and results:
+                    print(f"  [JOB {job_id}] All {len(results)} components "
+                          f"completed after {waited}s")
+                    return results
 
-    def combine_results(self, original_task: str, giant_queen_results: list) -> str:
-        """
-        Combine all GiantQueens' results into one Royal Honey.
+                completed = len(results)
+                total = len(component_ids) if component_ids else "?"
+                print(f"  [JOB {job_id}] Waiting... "
+                      f"{completed}/{total} components done "
+                      f"({waited}s elapsed)", end="\r")
 
-        Unlike a DwarfQueen's combine (which merges subtask outputs), the RajaBee
-        combines COMPLETE, SYNTHESIZED sections from expert teams.
-        """
-        console.print(f"\n  Combining results from {len(giant_queen_results)} GiantQueens into Royal Honey...")
+            except Exception as e:
+                print(f"  [JOB {job_id}] [WARN] Poll error: {e}")
 
+        print(f"  [JOB {job_id}] [TIMEOUT] Waited {max_wait}s")
+        return []
+
+    def _combine_results(self, original_task: str,
+                         component_results: list) -> str:
+        """Use local Ollama to combine component results into Royal Honey."""
         formatted = ""
-        for i, qr in enumerate(giant_queen_results):
+        for i, cr in enumerate(component_results):
+            task_desc = cr.get("task", f"Component {i+1}")
+            result_text = cr.get("result", "[No result]")
             formatted += f"\n{'='*40}\n"
-            formatted += f"SECTION {i+1} (from team handling: {qr['component'][:60]})\n"
+            formatted += f"SECTION {i+1}: {task_desc[:60]}\n"
             formatted += f"{'='*40}\n"
-            formatted += f"{qr['result']}\n"
+            formatted += f"{result_text}\n"
 
-        prompt = f"""You are a SENIOR editor combining results from {len(giant_queen_results)} expert teams into one comprehensive final document.
+        prompt = f"""You are a SENIOR editor combining results from {len(component_results)} expert teams into one comprehensive final document.
 
 The original task was: {original_task}
 
 Here are the completed sections from each team:
 {formatted}
 
-Please combine ALL sections into ONE well-organized, coherent final document.
-- Each section was completed by a separate team working independently
-- Integrate the sections smoothly — do NOT just concatenate them
-- Remove any redundancy between sections
+Combine ALL sections into ONE well-organized, coherent final document.
+- Integrate smoothly, do NOT just concatenate
+- Remove redundancy
 - Organize with clear headings and logical flow
-- Keep ALL important details from every team's contribution
-- The final document should read as if one expert wrote the entire thing
+- Keep ALL important details from every section
 
 Your combined final document:"""
 
-        royal_honey = self.ai.ask(
+        return self.ai.ask(
             prompt=prompt,
             model=self.model_name,
             temperature=0.5
         )
 
-        return royal_honey
 
-    def process_royal_nectar(self, task: str) -> str:
-        """
-        The complete RajaBee pipeline: receive task, produce Royal Honey.
+def main():
+    parser = argparse.ArgumentParser(
+        description="RajaBee -- King of the Bees. "
+                    "Connects to KillerBee website API."
+    )
+    parser.add_argument('--server', type=str, required=True,
+                        help='KillerBee server URL (e.g., http://KILLERBEE:8877)')
+    parser.add_argument('--swarm-id', type=int, required=True,
+                        help='Swarm ID to join')
+    parser.add_argument('--username', type=str, required=True,
+                        help='Username for KillerBee login')
+    parser.add_argument('--password', type=str, required=True,
+                        help='Password for KillerBee login')
+    parser.add_argument('--model', type=str, default='llama3.2:3b',
+                        help='Ollama model name (default: llama3.2:3b)')
+    parser.add_argument('--ollama-url', type=str,
+                        default='http://localhost:11434',
+                        help='Ollama API URL (default: http://localhost:11434)')
+    parser.add_argument('--poll-interval', type=int, default=5,
+                        help='Seconds between polls (default: 5)')
+    args = parser.parse_args()
 
-        1. Split task into major components (proportional to GiantQueen capabilities)
-        2. Delegate components to GiantQueens in parallel
-        3. Combine GiantQueens' results into Royal Honey
-        """
-        if HAS_RICH:
-            console.print(Panel(
-                f"[bold red]Royal Nectar received![/]\n\n[italic]{task}[/]",
-                title="👑👑 Incoming Royal Nectar",
-                border_style="red"
-            ))
-        else:
-            console.print(f"\nRoyal Nectar received: {task}")
+    raja = RajaBee(
+        server_url=args.server,
+        swarm_id=args.swarm_id,
+        username=args.username,
+        password=args.password,
+        model_name=args.model,
+        ollama_url=args.ollama_url,
+        poll_interval=args.poll_interval
+    )
 
-        total_start = time.time()
+    raja.start()
 
-        # Step 1: Split into major components
-        components = self.split_task(task)
 
-        # Step 2: Delegate to GiantQueens in parallel
-        giant_queen_results = self.delegate_to_giant_queens(components)
-
-        # Step 3: Combine into Royal Honey
-        royal_honey = self.combine_results(task, giant_queen_results)
-
-        total_elapsed = time.time() - total_start
-
-        if HAS_RICH:
-            console.print(Panel(
-                f"[bold yellow]Royal Honey is ready![/]\n"
-                f"Total time: {total_elapsed:.1f} seconds\n"
-                f"GiantQueens used: {len(self.giant_queen_capabilities)}\n"
-                f"Total workers across all hives: {sum(c.get('total_workers', 1) for c in self.giant_queen_capabilities.values())}",
-                title="👑👑 Royal Honey Delivered",
-                border_style="yellow"
-            ))
-        else:
-            console.print(f"\nRoyal Honey ready! Time: {total_elapsed:.1f}s, GiantQueens: {len(self.giant_queen_capabilities)}")
-
-        return royal_honey
-
-    def process_nectar(self, task: str) -> str:
-        """
-        Alias for process_royal_nectar — makes RajaBee wrappable in
-        queen_http_wrapper.py for N-level hierarchies.
-        """
-        return self.process_royal_nectar(task)
+if __name__ == '__main__':
+    main()
