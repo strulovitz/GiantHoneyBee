@@ -109,9 +109,10 @@ class GiantQueenClient:
                         task = component.get("task", "")
                         status = component.get("status", "")
                         if status in ("pending", "assigned", ""):
+                            original_task = component.get("original_task", task)
                             print(f"\n  [COMPONENT {comp_id}] Received: "
                                   f"{task[:80]}...")
-                            self._process_component(comp_id, task)
+                            self._process_component(comp_id, task, original_task)
                 else:
                     print(f"  Polling... no assigned work. "
                           f"(waiting {self.poll_interval}s)", end="\r")
@@ -120,9 +121,10 @@ class GiantQueenClient:
 
             time.sleep(self.poll_interval)
 
-    def _process_component(self, component_id: int, task: str):
+    def _process_component(self, component_id: int, task: str, original_task: str = ""):
         """Process a component: split into sub-components, wait, combine."""
         start_time = time.time()
+        original_task = original_task or task
 
         # Step 1: Claim the component
         try:
@@ -133,7 +135,7 @@ class GiantQueenClient:
 
         # Step 2: Split into sub-components using local Ollama
         print(f"  [COMPONENT {component_id}] Splitting into sub-components...")
-        sub_components = self._split_component(task)
+        sub_components = self._split_component(task, original_task)
         print(f"  [COMPONENT {component_id}] Split into "
               f"{len(sub_components)} sub-components")
 
@@ -177,16 +179,22 @@ class GiantQueenClient:
             print(f"  [COMPONENT {component_id}] [ERROR] "
                   f"Failed to post result: {e}")
 
-    def _split_component(self, task: str) -> list:
+    def _split_component(self, task: str, original_task: str = "") -> list:
         """Use local Ollama to split a component into sub-components."""
+        original_task = original_task or task
         prompt = f"""You are a coordinator splitting a task into 2-3 independent sub-components for separate teams.
+
+CRITICAL CONTEXT: The ORIGINAL QUESTION that started this whole process was:
+"{original_task}"
+
+Your specific component to split is: {task}
 
 RULES:
 - Each sub-component must be INDEPENDENT
 - Each should be substantial enough for a team to work on
-- Together they must fully cover the task
-
-The task is: {task}
+- Together they must fully cover YOUR component
+- Every sub-component MUST stay relevant to the ORIGINAL QUESTION above
+- Do NOT drift into unrelated topics — always tie back to what was originally asked
 
 Return ONLY a JSON array of strings. Example: ["sub-component 1", "sub-component 2"]
 

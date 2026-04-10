@@ -108,13 +108,14 @@ class WorkerClient:
                     for subtask in subtasks:
                         st_id = subtask.get("id") or subtask.get("component_id")
                         task = subtask.get("task", "")
+                        original_task = subtask.get("original_task", task)
 
                         # Try to claim it (another Worker might get it first)
                         try:
                             self.kb.claim_component(st_id, self.member_id)
                             print(f"\n  [SUBTASK {st_id}] Claimed: "
                                   f"{task[:80]}...")
-                            self._process_subtask(st_id, task)
+                            self._process_subtask(st_id, task, original_task)
                             break  # Process one at a time
                         except Exception as e:
                             # Another Worker probably claimed it first
@@ -129,16 +130,22 @@ class WorkerClient:
 
             time.sleep(self.poll_interval)
 
-    def _process_subtask(self, subtask_id: int, task: str):
+    def _process_subtask(self, subtask_id: int, task: str, original_task: str = ""):
         """Process a single subtask using local Ollama."""
         start_time = time.time()
+        original_task = original_task or task
 
         print(f"  [SUBTASK {subtask_id}] Processing with {self.model_name}...")
 
         # Use local Ollama to process the subtask
         prompt = f"""You are a worker bee. Answer this task completely and thoroughly.
 
-Task: {task}
+IMPORTANT CONTEXT: The ORIGINAL QUESTION that this subtask is part of was:
+"{original_task}"
+
+Your specific subtask to answer: {task}
+
+Stay focused on answering your subtask in a way that is relevant to the original question above.
 
 Your complete answer:"""
 

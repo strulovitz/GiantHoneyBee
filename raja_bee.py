@@ -160,14 +160,20 @@ class RajaBee:
         """Use local Ollama to split a task into major components."""
         prompt = f"""You are a SENIOR coordinator. Split this complex task into 2-4 MAJOR independent components.
 
+CRITICAL: Every component MUST stay focused on answering the ORIGINAL QUESTION below.
+Do NOT drift into unrelated topics. Each component should address a DIFFERENT PART of what was asked,
+but every component must clearly relate back to the original question.
+
 RULES:
 - Each component must be INDEPENDENT (can be completed without other components)
 - Each component should be SUBSTANTIAL (not a simple question)
 - Together, all components must fully cover the original task
+- Each component description MUST include the original question for context
 
-The task is: {task}
+ORIGINAL QUESTION: {task}
 
-Return ONLY a JSON array of strings. Example: ["component 1", "component 2"]
+Return ONLY a JSON array of strings. Each string should say what aspect of the original question to focus on.
+Example: ["Analyze [aspect 1] in the context of: [original question]", "Analyze [aspect 2] in the context of: [original question]"]
 
 Your JSON array:"""
 

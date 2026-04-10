@@ -108,11 +108,12 @@ class DwarfQueenClient:
                     for component in work:
                         comp_id = component.get("id") or component.get("component_id")
                         task = component.get("task", "")
+                        original_task = component.get("original_task", task)
                         status = component.get("status", "")
                         if status in ("pending", "assigned", ""):
                             print(f"\n  [COMPONENT {comp_id}] Assigned to me: "
                                   f"{task[:80]}...")
-                            self._process_component(comp_id, task)
+                            self._process_component(comp_id, task, original_task)
                 else:
                     # Check for unclaimed components we can claim
                     available = self.kb.get_available_components(self.swarm_id)
@@ -120,11 +121,12 @@ class DwarfQueenClient:
                         for component in available:
                             comp_id = component.get("id")
                             task = component.get("task", "")
+                            original_task = component.get("original_task", task)
                             try:
                                 self.kb.claim_component(comp_id, self.member_id)
                                 print(f"\n  [COMPONENT {comp_id}] Claimed: "
                                       f"{task[:80]}...")
-                                self._process_component(comp_id, task)
+                                self._process_component(comp_id, task, original_task)
                                 break  # One at a time
                             except Exception as e:
                                 print(f"  [COMPONENT {comp_id}] Could not claim: {e}")
@@ -137,9 +139,10 @@ class DwarfQueenClient:
 
             time.sleep(self.poll_interval)
 
-    def _process_component(self, component_id: int, task: str):
+    def _process_component(self, component_id: int, task: str, original_task: str = ""):
         """Process a component: split into subtasks for Workers."""
         start_time = time.time()
+        original_task = original_task or task
 
         # Step 1: Claim the component
         try:
@@ -151,7 +154,7 @@ class DwarfQueenClient:
         # Step 2: Split into subtasks using local Ollama
         print(f"  [COMPONENT {component_id}] Splitting into subtasks "
               f"for Workers...")
-        subtasks = self._split_into_subtasks(task)
+        subtasks = self._split_into_subtasks(task, original_task)
         print(f"  [COMPONENT {component_id}] Split into "
               f"{len(subtasks)} subtasks")
 
@@ -196,17 +199,24 @@ class DwarfQueenClient:
             print(f"  [COMPONENT {component_id}] [ERROR] "
                   f"Failed to post result: {e}")
 
-    def _split_into_subtasks(self, task: str) -> list:
+    def _split_into_subtasks(self, task: str, original_task: str = "") -> list:
         """Use local Ollama to split a component into subtasks for Workers."""
+        original_task = original_task or task
         prompt = f"""You are a team lead splitting a task into 2-4 small, specific subtasks that individual workers can complete independently.
+
+CRITICAL CONTEXT: The ORIGINAL QUESTION that started this whole process was:
+"{original_task}"
+
+Your specific component to split into subtasks is: {task}
 
 RULES:
 - Each subtask must be SMALL and SPECIFIC (a single focused question or action)
 - Each subtask must be INDEPENDENT (worker doesn't need other results)
-- Together they must fully cover the task
-- Keep subtasks simple enough for a small AI model to handle
+- Together they must fully cover YOUR component
+- Every subtask MUST stay relevant to the ORIGINAL QUESTION above
+- Do NOT drift into unrelated topics — if the original question asks for pros and cons, the subtasks should be about pros and cons
 
-The task is: {task}
+The task to split: {task}
 
 Return ONLY a JSON array of strings. Example: ["subtask 1", "subtask 2", "subtask 3"]
 
