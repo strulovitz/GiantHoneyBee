@@ -374,6 +374,7 @@ class GiantQueenClient:
                     time.sleep(self.poll_interval)
                     continue
 
+                # First: check for work assigned directly to me
                 work = self.kb.get_my_work(self.member_id)
                 if work:
                     for component in work:
@@ -382,13 +383,30 @@ class GiantQueenClient:
                         status = component.get("status", "")
                         if status in ("pending", "assigned", ""):
                             original_task = component.get("original_task", task)
-                            print(f"\n  [COMPONENT {comp_id}] Received: "
+                            print(f"\n  [COMPONENT {comp_id}] Assigned to me: "
                                   f"{task[:80]}...")
                             self._process_component(comp_id, task, original_task)
                 else:
-                    print(f"  Polling... no assigned work. "
-                          f"({len(self.subordinates)} subordinates, "
-                          f"waiting {self.poll_interval}s)", end="\r")
+                    # Second: check for unclaimed components I can claim
+                    available = self.kb.get_available_components(self.swarm_id)
+                    if available:
+                        for component in available:
+                            comp_id = component.get("id")
+                            task = component.get("task", "")
+                            original_task = component.get("original_task", task)
+                            try:
+                                self.kb.claim_component(comp_id, self.member_id)
+                                print(f"\n  [COMPONENT {comp_id}] Claimed: "
+                                      f"{task[:80]}...")
+                                self._process_component(comp_id, task, original_task)
+                                break
+                            except Exception as e:
+                                print(f"  [COMPONENT {comp_id}] Could not claim: {e}")
+                                continue
+                    else:
+                        print(f"  Polling... no work available. "
+                              f"({len(self.subordinates)} subordinates, "
+                              f"waiting {self.poll_interval}s)", end="\r")
             except Exception as e:
                 print(f"  [ERROR] Polling failed: {e}")
 
