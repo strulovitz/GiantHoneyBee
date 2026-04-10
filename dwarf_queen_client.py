@@ -99,9 +99,10 @@ class DwarfQueenClient:
         return True
 
     def _main_loop(self):
-        """Poll KillerBee for assigned components and process them."""
+        """Poll KillerBee for available components to claim and process."""
         while True:
             try:
+                # First check for work already assigned to us
                 work = self.kb.get_my_work(self.member_id)
                 if work:
                     for component in work:
@@ -109,12 +110,28 @@ class DwarfQueenClient:
                         task = component.get("task", "")
                         status = component.get("status", "")
                         if status in ("pending", "assigned", ""):
-                            print(f"\n  [COMPONENT {comp_id}] Received: "
+                            print(f"\n  [COMPONENT {comp_id}] Assigned to me: "
                                   f"{task[:80]}...")
                             self._process_component(comp_id, task)
                 else:
-                    print(f"  Polling... no assigned work. "
-                          f"(waiting {self.poll_interval}s)", end="\r")
+                    # Check for unclaimed components we can claim
+                    available = self.kb.get_available_components(self.swarm_id)
+                    if available:
+                        for component in available:
+                            comp_id = component.get("id")
+                            task = component.get("task", "")
+                            try:
+                                self.kb.claim_component(comp_id, self.member_id)
+                                print(f"\n  [COMPONENT {comp_id}] Claimed: "
+                                      f"{task[:80]}...")
+                                self._process_component(comp_id, task)
+                                break  # One at a time
+                            except Exception as e:
+                                print(f"  [COMPONENT {comp_id}] Could not claim: {e}")
+                                continue
+                    else:
+                        print(f"  Polling... no work available. "
+                              f"(waiting {self.poll_interval}s)", end="\r")
             except Exception as e:
                 print(f"  [ERROR] Polling failed: {e}")
 
@@ -142,7 +159,7 @@ class DwarfQueenClient:
             print(f"    Subtask {i+1}: {st[:70]}...")
 
         # Step 3: Post subtasks to KillerBee (Workers will claim these)
-        children_data = [{"task": st} for st in subtasks]
+        children_data = [{"task": st, "component_type": "subtask"} for st in subtasks]
         try:
             split_result = self.kb.split_component(component_id, children_data)
             print(f"  [COMPONENT {component_id}] Subtasks posted "

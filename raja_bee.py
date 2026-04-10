@@ -86,16 +86,9 @@ class RajaBee:
             print(f"\n  [ERROR] Cannot login to KillerBee: {e}")
             return False
 
-        # Register as RajaBee
-        try:
-            reg_data = self.kb.register_member(
-                self.swarm_id, "raja", self.model_name
-            )
-            self.member_id = reg_data.get("member_id", self.kb.user_id)
-            print(f"  Registered as RajaBee (member_id={self.member_id})")
-        except Exception as e:
-            print(f"  [WARN] Registration: {e}")
-            self.member_id = self.kb.user_id
+        # RajaBee is the swarm owner — no need to register as a member
+        self.member_id = self.kb.user_id
+        print(f"  RajaBee ready (user_id={self.member_id})")
 
         print_banner("RajaBee is RUNNING. Polling for jobs...")
         self._main_loop()
@@ -193,12 +186,14 @@ Your JSON array:"""
     def _wait_for_components(self, job_id: int, split_result: dict) -> list:
         """Poll KillerBee until all components for this job have results."""
         # Get component IDs from the split result
-        component_ids = split_result.get("component_ids", [])
+        components_info = split_result.get("components", [])
+        component_ids = [c["id"] for c in components_info]
 
         if not component_ids:
-            # If the API doesn't return IDs directly, we poll via
-            # get_children or similar
-            print(f"  [JOB {job_id}] Waiting for results via polling...")
+            print(f"  [JOB {job_id}] [ERROR] No component IDs from split")
+            return []
+
+        print(f"  [JOB {job_id}] Tracking {len(component_ids)} components: {component_ids}")
 
         max_wait = 3600  # 1 hour max
         waited = 0
@@ -208,41 +203,17 @@ Your JSON array:"""
             waited += self.poll_interval
 
             try:
-                # Check if all components have results
                 all_done = True
                 results = []
 
-                if component_ids:
-                    for comp_id in component_ids:
-                        children = self.kb.get_children(comp_id)
-                        # Check if this component itself has a result
-                        # by looking at the component data
-                        comp_data = children  # API may return component info
-                        if isinstance(comp_data, list):
-                            for child in comp_data:
-                                if child.get("result"):
-                                    results.append(child)
-                                else:
-                                    all_done = False
-                        elif isinstance(comp_data, dict):
-                            if comp_data.get("result"):
-                                results.append(comp_data)
-                            else:
-                                all_done = False
-                else:
-                    # Fallback: check job-level for completed components
-                    # Try getting pending jobs to see if this one is done
-                    try:
-                        work = self.kb.get_my_work(self.member_id)
-                        for item in work:
-                            if item.get("job_id") == job_id:
-                                children = item.get("components", [])
-                                for child in children:
-                                    if child.get("result"):
-                                        results.append(child)
-                                    else:
-                                        all_done = False
-                    except Exception:
+                for comp_id in component_ids:
+                    comp_resp = self.kb._request("GET", f"/api/component/{comp_id}/status")
+                    if comp_resp.get("status") == "completed" and comp_resp.get("result"):
+                        results.append({
+                            "task": comp_resp.get("task", ""),
+                            "result": comp_resp.get("result"),
+                        })
+                    else:
                         all_done = False
 
                 if all_done and results:
@@ -251,9 +222,8 @@ Your JSON array:"""
                     return results
 
                 completed = len(results)
-                total = len(component_ids) if component_ids else "?"
                 print(f"  [JOB {job_id}] Waiting... "
-                      f"{completed}/{total} components done "
+                      f"{completed}/{len(component_ids)} components done "
                       f"({waited}s elapsed)", end="\r")
 
             except Exception as e:

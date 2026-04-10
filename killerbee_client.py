@@ -152,6 +152,11 @@ class KillerBeeClient:
         data = self._request("GET", f"/api/swarm/{swarm_id}/subtasks/available")
         return data if isinstance(data, list) else data.get("subtasks", [])
 
+    def get_available_components(self, swarm_id: int) -> list:
+        """Get unclaimed components available for GiantQueens/DwarfQueens."""
+        data = self._request("GET", f"/api/swarm/{swarm_id}/components/available")
+        return data if isinstance(data, list) else data.get("components", [])
+
     # ── Heartbeat ─────────────────────────────────────────────────────
 
     def heartbeat(self, swarm_id: int, member_id: int,
