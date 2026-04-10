@@ -170,7 +170,7 @@ class KillerBeeClient:
             "GET", f"/api/swarm/{swarm_id}/unassigned",
             params={"type": member_type}
         )
-        return data if isinstance(data, list) else data.get("members", [])
+        return data if isinstance(data, list) else data.get("unassigned", [])
 
     def claim_subordinate(self, member_id: int,
                           subordinate_member_id: int) -> dict:
