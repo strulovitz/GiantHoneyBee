@@ -36,8 +36,8 @@ The same Worker Bee from Honeycomb Of AI — unchanged. Receives a subtask, proc
 
 The system is modular — any number of levels:
 
-- **2 levels:** RajaBee → DwarfQueens → Workers (tested)
-- **3 levels:** RajaBee → GiantQueens → DwarfQueens → Workers (tested)
+- **2 levels:** RajaBee → DwarfQueens → Workers (tested on localhost — see KillerBee/EXPERIMENT_LOG.md)
+- **3 levels:** RajaBee → GiantQueens → DwarfQueens → Workers (designed, not yet tested)
 - **N levels:** Unlimited depth. The only limit is available hardware, never the software.
 
 ---
