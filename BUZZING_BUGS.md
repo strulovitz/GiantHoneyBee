@@ -2,7 +2,9 @@
 
 > **Found by:** Nir during Phase 2 LAN test on Desktop
 > **Must fix before:** Rerunning Phase 2 LAN test
-> **Files to fix:** `dwarf_queen_client.py` and `raja_bee.py` — both have `_run_calibration()` with the same two bugs
+> **Files to fix:** `dwarf_queen_client.py` and `raja_bee.py` — both have `_run_calibration()` with the same bugs
+
+**Status:** Bug 1 (simultaneous) — FIXED. Bug 2 (formula) — FIXED. Bug 3 (warmup) — **NEW, NOT FIXED**.
 
 ---
 
@@ -113,7 +115,73 @@ Both files have identical calibration logic and need the same two fixes.
 
 ---
 
-## After fixing
+---
+
+## Bug 3: Ollama Warmup/Caching Makes Sequential Calibration Unfair (NEW — 2026-04-11)
+
+**Status: NOT FIXED**
+
+### What happened
+
+After fixing Bugs 1 and 2, we restarted all 3 bees with the sequential calibration and proportional formula. Results:
+
+```
+worker_alpha: 10.1s  (tested FIRST)
+worker_bravo:  5.1s  (tested SECOND)
+```
+
+Speed scores: 5.0 vs 10.0. Fractions: **0.333 vs 0.667**.
+
+These are **identical workers** on the **same machine** with the **same model**. Fractions should be approximately **0.50 vs 0.50**. But the second worker tested is always faster because of Ollama's behavior:
+
+- When the first worker is tested, Ollama loads the model into memory (cold start) or processes without cache benefit
+- When the second worker is tested moments later, the model is already hot in memory/GPU, and Ollama may cache KV computations from the similar prompt structure
+- Result: the second worker appears ~2x faster, purely due to Ollama warmup — NOT actual performance difference
+
+### The fix
+
+Add a **warmup round** before the real calibration measurement. The flow should be:
+
+1. **Warmup phase:** Send a short throwaway prompt to ALL subordinates (e.g., "Say hello") — sequentially, same as calibration. This ensures Ollama is warmed up on every worker. Discard the results and times.
+2. **Real calibration phase:** Now send the actual calibration question sequentially and measure times. All workers start from the same warmed-up state.
+
+This way the model is already loaded and hot on every worker's Ollama before the real measurement begins.
+
+### Alternative approaches (if warmup isn't enough)
+
+- **Multiple rounds:** Run calibration 2-3 times, discard the first round, average the rest
+- **Reverse order on second round:** Test in order A→B first round, then B→A second round, average the times
+- **Median of 3 runs:** Most robust against outliers
+
+### Where in the code
+
+In `_run_calibration()` in both files, add the warmup phase BEFORE the calibration task generation:
+
+```python
+# WARMUP: ensure Ollama is hot on all subordinates
+print("  [BUZZING] Warmup round — loading models on all subordinates...")
+for sub in self.subordinates:
+    sub_id = sub.get("member_id") or sub.get("id")
+    sub_name = sub.get("username", f"member-{sub_id}")
+    # Send a trivial task, wait for completion, discard result
+    warmup_data = self.kb._request("POST", f"/api/member/{sub_id}/calibration", {
+        "task": "Say hello in one sentence.",
+        "component_type": "calibration"
+    })
+    # Poll until done (same as calibration polling)
+    ...
+    print(f"  [BUZZING] {sub_name} warmed up")
+print("  [BUZZING] Warmup complete. Starting real calibration...")
+```
+
+### Files to fix
+
+1. **GiantHoneyBee/dwarf_queen_client.py** — `_run_calibration()` method
+2. **GiantHoneyBee/raja_bee.py** — `_run_calibration()` method
+
+---
+
+## After fixing Bug 3
 
 1. Push fixes to GitHub
 2. Desktop does `git pull` in GiantHoneyBee
@@ -121,3 +189,4 @@ Both files have identical calibration logic and need the same two fixes.
 4. Laptop kills RajaBee if running
 5. Laptop re-seeds KillerBee database (fresh start)
 6. Restart all bees and rerun Phase 2 LAN test
+7. Verify identical workers get approximately equal fractions (~0.50 vs 0.50)
