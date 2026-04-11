@@ -4,7 +4,7 @@
 > **Must fix before:** Rerunning Phase 2 LAN test
 > **Files to fix:** `dwarf_queen_client.py` and `raja_bee.py` — both have `_run_calibration()` with the same bugs
 
-**Status:** Bug 1 (simultaneous) — FIXED. Bug 2 (formula) — FIXED. Bug 3 (order bias) — **NOT FIXED, warmup attempt failed, need two-round reversed-order calibration**.
+**Status:** Bug 1 (simultaneous) — FIXED. Bug 2 (formula) — FIXED. Bug 3 (order bias) — **PARTIALLY IMPROVED, two-round helped but Ollama timing is fundamentally inconsistent**.
 
 ---
 
@@ -117,9 +117,9 @@ Both files have identical calibration logic and need the same two fixes.
 
 ---
 
-## Bug 3: Sequential Calibration Order Bias — Second Worker Always Faster
+## Bug 3: Sequential Calibration Order Bias — Ollama Timing Inconsistent
 
-**Status: NOT FIXED — warmup attempt FAILED**
+**Status: PARTIALLY IMPROVED — two-round helped but not solved**
 
 ### What happened (Round 2 — after Bugs 1+2 fixed)
 
@@ -200,11 +200,38 @@ Note: Round 2 should use a NEW calibration question (generated fresh) to avoid a
 
 ---
 
-## After fixing Bug 3
+### Round 4 results (two-round reversed-order calibration — 2026-04-11)
 
-1. Push fixes to GitHub
-2. Desktop does `git pull` in GiantHoneyBee
-3. Kill all 3 Desktop bees (Ctrl+C in each terminal)
-4. Laptop re-seeds KillerBee database (fresh start)
-5. Restart all bees and rerun Phase 2 LAN test
-6. Verify identical workers get approximately equal fractions (~0.50 vs 0.50)
+```
+Round 1 (forward: alpha then bravo):
+  worker_alpha: 10.2s (FIRST)
+  worker_bravo: 10.2s (SECOND) — same time! Forward order works.
+
+Round 2 (reverse: bravo then alpha):
+  worker_bravo:  5.1s (FIRST)
+  worker_alpha: 10.1s (SECOND) — second is SLOWER this time??
+
+Averages:
+  worker_alpha: (10.2 + 10.1) / 2 = 10.1s
+  worker_bravo: (10.2 + 5.1) / 2  =  7.6s
+
+Speed scores: alpha=7.5, bravo=10.0
+Quality: both 6.0
+Buzzing: alpha=45.0, bravo=60.0
+Fractions: 0.429 vs 0.571
+```
+
+**Analysis:** Round 1 was perfect — both 10.2s. But Round 2 was inconsistent: bravo took only 5.1s when tested first. The "second is always faster" pattern doesn't even hold anymore — in Round 2, second (alpha) was SLOWER. Ollama's response time varies by ~2x between runs for no apparent reason. This is not an order effect, it's **Ollama timing noise**.
+
+**Fractions improved** from 0.277/0.723 to 0.429/0.571 — closer to 0.50/0.50 but still not right.
+
+### Possible next steps
+
+1. **More rounds:** Run 3-5 rounds instead of 2, average more samples to smooth out noise
+2. **Accept the noise:** For workers on DIFFERENT machines (the real use case), the actual hardware differences will dominate over Ollama timing noise. The current 0.429/0.571 is arguably "good enough" — it won't matter much when workers actually have different GPUs
+3. **Skip speed scoring for same-machine workers:** If all workers share the same Ollama, speed is meaningless — just use quality scores and equal fractions
+4. **Proceed with Phase 2 test:** The fractions are close enough (0.429 vs 0.571) that the job will still work. We can refine calibration later.
+
+### Decision needed from Nir
+
+Should we (a) keep refining calibration, or (b) accept 0.429/0.571 and proceed with the actual Phase 2 LAN job test?
