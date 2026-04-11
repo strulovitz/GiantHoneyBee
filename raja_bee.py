@@ -522,7 +522,7 @@ Task: {task}"""
         for i, c in enumerate(components):
             print(f"  [SPLIT] [{i+1}] {c[:100]}")
 
-        max_expected = num_components if num_components else 4
+        max_expected = max(num_components if num_components else 4, 4)
         if len(components) < 2:
             print(f"  [SPLIT] Too few items ({len(components)}), falling back to single component")
             components = [task]

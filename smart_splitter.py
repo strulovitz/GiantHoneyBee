@@ -82,16 +82,21 @@ def _detect_repeating_prefix(lines: list) -> list:
 
     # Find the best pattern: must appear 2+ times.
     # Prefer non-indented (top-level) patterns over indented ones.
-    # Among same indentation level, prefer most common.
+    # Among non-indented, prefer LONGER/MORE DISTINCTIVE markers over shorter
+    # ones (** is a section header, * is a bullet — ** is the parent).
+    # Among same marker length, prefer less common (fewer = higher level).
     candidates = [(p, c) for p, c in pattern_counts.items() if c >= 2 and p]
     if not candidates:
         return None
 
-    # Sort: non-indented first, then by count descending
     def sort_key(pc):
         p, c = pc
         is_indented = 1 if p.startswith("I") else 0
-        return (is_indented, -c)
+        # Longer non-alphanumeric prefix = more distinctive = higher level
+        marker_len = len(p.replace("I", "").replace("D", "").replace("L", "").replace("E", "").replace("_", ""))
+        # Numbered patterns (D.) are always top-level structure
+        is_numbered = 0 if "D" in p or "L" in p else 1
+        return (is_indented, is_numbered, -marker_len, c)
 
     candidates.sort(key=sort_key)
     best_pattern = candidates[0][0]
@@ -317,6 +322,34 @@ Research life support systems needed for multi-decade space journeys including h
 Research navigation and communication challenges for interstellar travel including gravitational slingshots, laser communication, and quantum entanglement.""",
 
         "Nested JSON (the bug we had)": """{"propulsion": {"light_sails": {"description": "Use photons", "pros": ["Low mass"], "cons": ["Slow"]}, "nuclear": {"description": "Use explosions", "pros": ["Fast"], "cons": ["Radiation"]}}}""",
+
+        "Bold headers with bullet sub-items (real LLM output)": """**Part 1: Propulsion Concepts**
+
+This part will explore different propulsion concepts.
+
+* **Light Sails**: A light sail uses the momentum of solar photons. Pros: Low mass. Cons: Takes thousands of years.
+* **Nuclear Pulse Propulsion**: Uses nuclear explosions. Pros: High specific impulse. Cons: Large fuel requirement.
+* **Fusion Propulsion**: Fusion reactions for thrust. Pros: High energy density. Cons: Technology not ready.
+
+**Part 2: Generation Ships**
+
+This part will explore generation ships.
+
+* **Generation Ship Design**: Must sustain human life for centuries. Pros: Safe haven. Cons: Extremely expensive.
+* **Closed Ecosystems**: Must support life for extended periods. Pros: Self-sustaining. Cons: Complex.
+
+**Part 3: Propellant Options**
+
+This part will explore propellant options.
+
+* **Hydrogen Fuel**: Popular due to high energy density. Pros: Efficient. Cons: Hard to obtain in quantity.
+* **Antimatter Propulsion**: Uses antimatter reactions. Pros: Highest specific impulse. Cons: Extremely rare.
+
+**Part 4: Mission Planning**
+
+This part will explore mission planning.
+
+* **Navigation**: Requires precise calculations. Pros: Essential. Cons: Extremely complex.""",
     }
 
     import sys
