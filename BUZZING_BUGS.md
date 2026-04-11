@@ -112,52 +112,54 @@ In each file, before each real calibration task, send a dummy question through t
 
 **Status: NOT FIXED**
 
-### What happened (Round 5 — after dummy cache reset fix, 2026-04-11)
+### Round 5 (dummy cache reset, no verbose logging, 2026-04-11)
 
-**Full data from all 3 terminals on Desktop:**
+Speed: 10.1s vs 10.1s, both speed=10.0. Bug 3 confirmed fixed.
+Quality: 2.0 vs 6.0. Fractions: 0.250 vs 0.750. Clearly wrong.
 
-Worker Alpha processing log:
-```
-TASK 1 (calibration dummy): "Name three colors of the rainbow. Reply in three words only."
-  → Completed in 0.2s (dummy, discarded)
-TASK 2 (calibration real):  "What are the key factors that contribute to urban heat islands..."
-  → Completed in 3.4s (ACTUAL processing time)
-```
+### Round 6 (verbose logging added, 2026-04-11)
 
-Worker Bravo processing log:
+**Full data from all 3 terminals on Desktop (verbose logging):**
+
+Speed measurements:
 ```
-TASK 3 (calibration dummy): "Name three colors of the rainbow. Reply in three words only."
-  → Completed in 0.5s (dummy, discarded)
-TASK 4 (calibration real):  "What are the key factors that contribute to urban heat islands..."
-  → Completed in 3.5s (ACTUAL processing time)
+worker_alpha actual processing: 3.5s (DwarfQueen saw: 10.2s including polling+network)
+worker_bravo actual processing: 3.6s (DwarfQueen saw: 10.1s including polling+network)
+Both speed=10.0. Bug 3 confirmed fixed again.
 ```
 
-DwarfQueen measured times (wall-clock including polling + network):
+Quality scores and judge responses:
 ```
-worker_alpha: 10.1s → speed=10.0
-worker_bravo: 10.1s → speed=10.0
-```
-
-**Speed is PERFECT.** Actual worker processing: 3.4s vs 3.5s — essentially identical. The DwarfQueen sees 10.1s for both because her measurement includes network round-trips (Desktop→Laptop KillerBee→Desktop worker) plus the 5-second polling interval. But the RELATIVE measurement is fair — both 10.1s, both speed=10.0. Bug 3 is fully solved.
-
-**Quality scores are the problem:**
-```
-worker_alpha: quality=2.0  (judged by DwarfQueen's llama3.2:3b)
-worker_bravo: quality=6.0  (judged by DwarfQueen's llama3.2:3b)
-
-Buzzing: alpha = 10.0 * 2.0 = 20.0
-         bravo = 10.0 * 6.0 = 60.0
-Fractions: 0.250 vs 0.750
+worker_alpha: judge raw response = "8" → quality=8.0 → buzzing=80.0
+worker_bravo: judge raw response = "6" → quality=6.0 → buzzing=60.0
+Fractions: 0.571 vs 0.429
 ```
 
-Identical workers, identical model, identical question, nearly identical processing time — but the quality judge gave scores of 2 and 6. This 4-point gap created a 3:1 work split.
+**Why the judge gave different scores — the answers ARE actually different:**
 
-### Why this happens
+worker_alpha's answer:
+- More structured: uses numbered lists with bold headings
+- Covers 6 specific subtopics: domestic life, social hierarchy, economy/trade, culinary practices, disaster response, environmental concerns
+- More factual detail and specifics
+- Opens with confident "I'll dive into..."
 
-- The DwarfQueen uses llama3.2:3b to judge quality of answers from workers ALSO running llama3.2:3b — a 3B model rating another 3B model's output
-- Small models asked to "rate from 1-10" produce inconsistent, noisy scores
-- The same model judging two similar-quality answers from the same model can easily give 2 to one and 6 to the other — essentially random
-- This noise completely dominates the buzzing score when speed scores are equal (as they should be for identical workers)
+worker_bravo's answer:
+- More narrative/essay style, less structured
+- Opens with "I must admit I'm not exactly familiar with ancient cities..." (sounds less confident)
+- Covers similar ground but more generally, fewer specific facts
+- More philosophical/reflective tone
+
+The 8 vs 6 judgment is actually NOT unreasonable for these specific outputs. Alpha's answer IS more detailed and structured.
+
+### Why this is still a problem
+
+The answers are different because of **LLM non-determinism at temperature > 0**. Same model (llama3.2:3b), same prompt, but the random sampling during generation produced different text. On the next run it could easily flip — bravo gets the structured answer, alpha gets the narrative one.
+
+The quality difference is REAL for these specific outputs, but it does NOT reflect a real capability difference between the workers. It reflects random variation in LLM output. The judge is doing its job correctly — the problem is upstream.
+
+### Root cause of Bug 4
+
+It's NOT that the judge is bad. It's that **identical workers produce different outputs due to LLM randomness**, and the judge correctly identifies real quality differences between those random outputs. The fix must address the randomness in the inputs to the judge, not the judge itself.
 
 ### The impact
 
