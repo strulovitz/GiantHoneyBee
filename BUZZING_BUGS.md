@@ -1,237 +1,107 @@
 # Buzzing Calibration Bugs — Found During Phase 2 LAN Test (2026-04-11)
 
 > **Found by:** Nir during Phase 2 LAN test on Desktop
-> **Must fix before:** Rerunning Phase 2 LAN test
-> **Files to fix:** `dwarf_queen_client.py` and `raja_bee.py` — both have `_run_calibration()` with the same bugs
+> **Files affected:** `dwarf_queen_client.py`, `raja_bee.py`, `giant_queen_client.py` — all have `_run_calibration()`
 
-**Status:** Bug 1 (simultaneous) — FIXED. Bug 2 (formula) — FIXED. Bug 3 (order bias) — **PARTIALLY IMPROVED, two-round helped but Ollama timing is fundamentally inconsistent**.
-
----
-
-## Bug 1: Simultaneous Calibration Causes False Speed Differences
-
-### What happened
-
-During Buzzing calibration, the DwarfQueen sent the calibration task to BOTH workers **at the same time**. Both workers are on the **same machine** (Desktop), hitting the **same local Ollama instance**. Ollama processes requests **sequentially** (one at a time). 
-
-Result:
-- worker_alpha finished in **5.0s** (got Ollama immediately)
-- worker_bravo finished in **10.1s** (waited ~5s in Ollama's queue, then processed for ~5s)
-
-The 2x time difference is a **scheduling artifact**, NOT a real performance difference. They are identical workers on identical hardware with the identical model.
-
-### The fix
-
-Calibration tasks must be sent **SEQUENTIALLY**, not simultaneously. The flow should be:
-
-1. Send calibration to worker_alpha
-2. **Wait for worker_alpha to complete**
-3. Send calibration to worker_bravo
-4. **Wait for worker_bravo to complete**
-
-This way each worker gets exclusive Ollama access and the timing reflects **actual processing speed**, not queue position.
-
-### Where in the code
-
-In `_run_calibration()`, the current code posts calibration tasks to ALL subordinates in a loop without waiting:
-
-```python
-for sub in self.subordinates:
-    # Posts calibration task immediately — all hit Ollama at once
-    cal_data = self.kb._request("POST", f"/api/member/{sub_id}/calibration", ...)
-    calibration_tasks[sub_id] = {"component_id": comp_id, "start_time": time.time()}
-```
-
-Then it waits for all results in a separate polling loop. This means all subordinates are processing concurrently, competing for the same Ollama.
-
-**Fix:** Send calibration to one subordinate, poll until it completes, record time. Then send to the next. Each subordinate gets a fair, uncontested measurement.
+**Status:** Bug 1 (simultaneous) — FIXED. Bug 2 (formula) — FIXED. Bug 3 (timing inconsistency) — ROOT CAUSE FOUND, FIX PROVEN, implementation pending.
 
 ---
 
-## Bug 2: Speed Scoring Formula Is Broken
+## Bug 1: Simultaneous Calibration — FIXED
 
-### What happened
+Calibration was sent to all workers at once. Workers sharing the same Ollama instance competed for it sequentially, so the first to arrive looked fast and the last looked slow. A scheduling artifact, not real performance.
 
-The speed scoring formula uses linear interpolation where the fastest always gets 10 and the slowest always gets 1, **regardless of the actual time ratio**:
-
-```python
-speed_score = 10.0 - 9.0 * ((elapsed - fastest) / (slowest - fastest))
-```
-
-With only 2 workers:
-- Fastest → 10.0 (always)
-- Slowest → 1.0 (always)
-
-This means:
-- If one takes 5.0s and the other takes 5.1s → scores are 10 and 1 (absurd!)
-- If one takes 5.0s and the other takes 10.0s → scores are 10 and 1 (a 2x difference becomes 10x)
-- If one takes 5.0s and the other takes 50.0s → scores are 10 and 1 (a 10x difference is also 10x)
-
-The formula **destroys all information about the actual ratio** between speeds.
-
-In our test: worker_alpha (5.0s) got buzzing 60.0, worker_bravo (10.1s) got buzzing 6.0. Fractions: 0.909 vs 0.091. That means worker_alpha gets **10x more work** than worker_bravo, even though it's only **2x faster**. The fractions should have been roughly 0.667 vs 0.333.
-
-### The fix
-
-Speed score should be **proportional to actual times**:
-
-```python
-speed_score = 10.0 * (fastest / elapsed)
-```
-
-Examples with this formula:
-- Same speed as fastest → `10 * (5/5)` = **10.0**
-- 2x slower than fastest → `10 * (5/10)` = **5.0**
-- 3x slower → `10 * (5/15)` = **3.33**
-- 10x slower → `10 * (5/50)` = **1.0**
-
-This preserves the actual performance ratio. Two workers that are 2x apart in speed will get buzzings that are 2x apart (assuming same quality), leading to fractions that are 2:1 — which is correct.
-
-### Where in the code
-
-In `_run_calibration()`, the scoring section:
-
-```python
-# Current (broken):
-if slowest == fastest:
-    speed_score = 10.0
-else:
-    speed_score = 10.0 - 9.0 * ((elapsed - fastest) / (slowest - fastest))
-
-# Should be:
-speed_score = 10.0 * (fastest / elapsed)
-```
-
-The `min(10.0, max(1.0, ...))` clamping can stay as a safety net.
+**Fix:** Send calibration tasks sequentially — one at a time, wait for completion before sending the next.
 
 ---
 
-## Both bugs exist in both files
+## Bug 2: Speed Scoring Formula — FIXED
 
-1. **GiantHoneyBee/dwarf_queen_client.py** — `_run_calibration()` method (lines ~196-338)
-2. **GiantHoneyBee/raja_bee.py** — `_run_calibration()` method (lines ~209-363)
+The old formula (`10 - 9 * ((elapsed - fastest) / (slowest - fastest))`) always gave the fastest worker 10 and the slowest 1, regardless of the actual time ratio. A worker 1% slower got the same score (1) as a worker 10x slower.
 
-Both files have identical calibration logic and need the same two fixes.
-
----
+**Fix:** Proportional formula: `speed_score = 10.0 * (fastest / elapsed)`. A worker 2x slower gets 5.0, 3x slower gets 3.33, etc. Preserves actual ratios.
 
 ---
 
-## Bug 3: Sequential Calibration Order Bias — Ollama Timing Inconsistent
+## Bug 3: LLM Backend Timing Inconsistency — ROOT CAUSE FOUND
 
-**Status: PARTIALLY IMPROVED — two-round helped but not solved**
+### The problem
 
-### What happened (Round 2 — after Bugs 1+2 fixed)
+After fixing Bugs 1 and 2, identical workers on identical hardware still got wildly different calibration times. Sequential testing showed ~2x variation between runs.
+
+### What we tried and what failed
+
+| Attempt | Result | Why it failed |
+|---------|--------|---------------|
+| Warmup round (dummy "reply with one word" before all calibrations) | No change. 10.1s vs 5.1s still. | The warmup cached a DIFFERENT prompt. It did not flush the state that mattered. |
+| Two-round reversed order (A,B then B,A, average times) | Partially helped (0.429 vs 0.571). | The inconsistency is not a consistent order bias — it's unpredictable noise. Averaging helped by accident, not by design. |
+| Multiple rounds | Not tried. Would mask the problem, not fix it. |
+
+### Root cause: LLM prompt evaluation caching
+
+**Discovered through Google research + local experiment on 2026-04-11.**
+
+All local LLM backends (Ollama, LM Studio, llama.cpp, vLLM) cache internal computations (KV cache, prompt token evaluation) from recent requests. When the SAME prompt arrives again, the backend skips most of the evaluation work — partial eval instead of full eval. This makes the second identical request much faster.
+
+This is NOT GPU warmup. This is NOT model loading. This is the LLM backend recognizing it has already evaluated these specific tokens and reusing that work.
+
+**Key insight from Nir:** A warmup with a DIFFERENT prompt doesn't help because it caches the WRONG tokens. You need a dummy question that OVERWRITES the cached state with something unrelated to the real calibration question. Then the real question gets a full, fair evaluation.
+
+### Proof — local experiment on Laptop (RTX 5090)
 
 ```
-worker_alpha: 10.1s  (tested FIRST)  → speed=5.0, quality=6.0, buzzing=30.0
-worker_bravo:  5.1s  (tested SECOND) → speed=10.0, quality=6.0, buzzing=60.0
-Fractions: 0.333 vs 0.667
+=== TEST 1: Three sequential, NO reset between them ===
+  Run 1: 3.90s    ← cold, full prompt evaluation
+  Run 2: 1.36s    ← warm, partial eval (cached from Run 1)
+  Run 3: 1.61s    ← warm
+
+=== TEST 2: Three sequential, dummy reset BEFORE each ===
+  Run 1: 1.38s    ← dummy absorbed cold start, real question gets fair eval
+  Run 2: 1.30s    ← same
+  Run 3: 1.53s    ← same
 ```
 
-### What happened (Round 3 — after warmup fix added)
+Confirmed with cold start (model unloaded between tests):
 
 ```
-Warmup round completed (both workers warmed up)
-worker_alpha: 10.1s  (tested FIRST)  → speed=5.1, quality=6.0, buzzing=30.6
-worker_bravo:  5.1s  (tested SECOND) → speed=10.0, quality=8.0, buzzing=80.0
-Fractions: 0.277 vs 0.723
+=== Cold start, NO reset ===
+  Run 1: 3.08s    ← cold
+  Run 2: 1.20s    ← cached
+  Run 3: 1.13s    ← cached
+  Run 4: 1.44s    ← cached
+
+=== Cold start, dummy reset BEFORE each ===
+  Run 1: 1.45s    ← consistent
+  Run 2: 1.28s    ← consistent
+  Run 3: 1.34s    ← consistent
+  Run 4: 1.15s    ← consistent
 ```
 
-**The warmup did NOT help.** Times are identical to before warmup (10.1s vs 5.1s). The problem is NOT cold model loading. Something else is causing the second worker to consistently take half the time.
+**The dummy reset makes all runs consistent.** The ~3x penalty on the first run completely disappears.
 
-### Root cause analysis
+### The fix: dummy reset before each calibration measurement
 
-The issue is NOT model loading (warmup proved this). Possible real causes:
+Before sending the real calibration question to each subordinate, send a short dummy question on a completely different topic (e.g., "What is the capital of Japan? Reply in one word."). This overwrites the backend's prompt cache with unrelated tokens. The real calibration question then gets a full, fair prompt evaluation — same for every worker.
 
-1. **Ollama KV cache / prompt cache:** Ollama may cache internal computations (KV cache) from the first request. The second request with a similar prompt structure benefits from this cache, even though it's a different worker process. Both workers hit the SAME Ollama instance on localhost.
+### Why ONLY in calibration, NOT in real work
 
-2. **OS/GPU memory state:** After the first inference, GPU memory is laid out optimally. The second inference benefits from warm GPU caches (L2 cache, memory pages already mapped).
+**Calibration** is about FAIR COMPARISON between workers. Cache advantages are unfair — they reflect test order, not hardware capability. The dummy reset levels the playing field.
 
-3. **Ollama internal batching or scheduling:** Ollama may have internal optimizations that favor subsequent requests.
+**Real work** is about MAXIMUM PERFORMANCE. Cache advantages are a FEATURE during real work. Example from the MadHoney book: DwarfQueen sends robot simulation subtasks with incrementally different parameters (knee stiffness 0.70, 0.73, 0.76...). The LLM caches the robot context from the first subtask, making subsequent subtasks faster. This is free performance — killing it with dummy resets would sabotage throughput across thousands of workers.
 
-### The real fix — test order must not affect scores
+**The rule:** Dummy reset in calibration (fairness). Let the cache work in production (performance).
 
-Since both workers share the same Ollama, order will ALWAYS matter. Simple warmup cannot fix this. The fix must **cancel out the order effect**:
+### Scale implications
 
-**Two-round calibration with reversed order:**
-
-1. Round 1: Test worker_alpha FIRST, then worker_bravo. Record times.
-2. Round 2: Test worker_bravo FIRST, then worker_alpha. Record times.
-3. Average each worker's times across both rounds.
-
-This way each worker is tested once as "first" (disadvantaged) and once as "second" (advantaged). The average cancels out the position effect.
-
-Expected result for identical workers:
-- worker_alpha: avg of ~10s (round 1, first) + ~5s (round 2, second) = ~7.5s
-- worker_bravo: avg of ~5s (round 1, second) + ~10s (round 2, first) = ~7.5s
-- Fractions: ~0.50 vs 0.50
-
-For actually different workers (e.g., one has a better GPU), the real speed difference would still show through in the average.
-
-### Where in the code
-
-In `_run_calibration()` in both files. Replace the single sequential calibration loop with:
-
-```python
-# Round 1: test in order A, B, C...
-round1_times = {}
-for sub in self.subordinates:
-    # send calibration, wait, record time
-    round1_times[sub_id] = elapsed
-
-# Round 2: test in REVERSE order C, B, A...
-round2_times = {}
-for sub in reversed(self.subordinates):
-    # send NEW calibration question, wait, record time
-    round2_times[sub_id] = elapsed
-
-# Average times
-for sub_id in round1_times:
-    avg_time = (round1_times[sub_id] + round2_times[sub_id]) / 2
-```
-
-Note: Round 2 should use a NEW calibration question (generated fresh) to avoid any prompt-level caching.
+- **Same-machine workers** (our test setup): Both workers hit the same Ollama. The dummy reset is critical — without it, the second worker always benefits from the first's cached prompt evaluation.
+- **Different-machine workers** (real mega-hive): Each worker has its own Ollama on its own machine. The prompt cache issue is less severe (no sharing), BUT workers that were recently active have warm Ollama state while idle workers are cold. The dummy reset normalizes all workers to a consistent state before measurement.
+- **Multi-level hierarchies** (RajaBee → GiantQueen → DwarfQueen → Worker): Calibration happens at EVERY level. The dummy reset must happen at every level — RajaBee testing GiantQueens, GiantQueens testing DwarfQueens, DwarfQueens testing Workers.
+- **Backend-agnostic:** This fix works with any LLM backend (Ollama, LM Studio, llama.cpp, vLLM) because all of them have some form of prompt/KV caching. No backend-specific API parameters needed.
 
 ### Files to fix
 
-1. **GiantHoneyBee/dwarf_queen_client.py** — `_run_calibration()` method
-2. **GiantHoneyBee/raja_bee.py** — `_run_calibration()` method
+1. `GiantHoneyBee/dwarf_queen_client.py` — `_run_calibration()`
+2. `GiantHoneyBee/raja_bee.py` — `_run_calibration()`
+3. `GiantHoneyBee/giant_queen_client.py` — `_run_calibration()`
 
----
-
-### Round 4 results (two-round reversed-order calibration — 2026-04-11)
-
-```
-Round 1 (forward: alpha then bravo):
-  worker_alpha: 10.2s (FIRST)
-  worker_bravo: 10.2s (SECOND) — same time! Forward order works.
-
-Round 2 (reverse: bravo then alpha):
-  worker_bravo:  5.1s (FIRST)
-  worker_alpha: 10.1s (SECOND) — second is SLOWER this time??
-
-Averages:
-  worker_alpha: (10.2 + 10.1) / 2 = 10.1s
-  worker_bravo: (10.2 + 5.1) / 2  =  7.6s
-
-Speed scores: alpha=7.5, bravo=10.0
-Quality: both 6.0
-Buzzing: alpha=45.0, bravo=60.0
-Fractions: 0.429 vs 0.571
-```
-
-**Analysis:** Round 1 was perfect — both 10.2s. But Round 2 was inconsistent: bravo took only 5.1s when tested first. The "second is always faster" pattern doesn't even hold anymore — in Round 2, second (alpha) was SLOWER. Ollama's response time varies by ~2x between runs for no apparent reason. This is not an order effect, it's **Ollama timing noise**.
-
-**Fractions improved** from 0.277/0.723 to 0.429/0.571 — closer to 0.50/0.50 but still not right.
-
-### Possible next steps
-
-1. **More rounds:** Run 3-5 rounds instead of 2, average more samples to smooth out noise
-2. **Accept the noise:** For workers on DIFFERENT machines (the real use case), the actual hardware differences will dominate over Ollama timing noise. The current 0.429/0.571 is arguably "good enough" — it won't matter much when workers actually have different GPUs
-3. **Skip speed scoring for same-machine workers:** If all workers share the same Ollama, speed is meaningless — just use quality scores and equal fractions
-4. **Proceed with Phase 2 test:** The fractions are close enough (0.429 vs 0.571) that the job will still work. We can refine calibration later.
-
-### Decision needed from Nir
-
-Should we (a) keep refining calibration, or (b) accept 0.429/0.571 and proceed with the actual Phase 2 LAN job test?
+In each file, before each real calibration task, send a dummy question through the same KillerBee calibration API. Wait for the dummy to complete (discard result), then send the real question and measure time.
