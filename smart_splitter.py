@@ -92,15 +92,15 @@ def _detect_repeating_prefix(lines: list) -> list:
     def sort_key(pc):
         p, c = pc
         is_indented = 1 if p.startswith("I") else 0
-        # Longer non-alphanumeric prefix = more distinctive = higher level
-        marker_len = len(p.replace("I", "").replace("D", "").replace("L", "").replace("E", "").replace("_", ""))
-        # Numbered patterns (D.) are always top-level structure
-        is_numbered = 0 if "D" in p or "L" in p else 1
-        return (is_indented, is_numbered, -marker_len, c)
+        # In hierarchical text, top-level items appear FEWER times than
+        # sub-items. 4 section headers with 16 bullets under them = the
+        # 4-count pattern is the structure we want. Prefer less common.
+        return (is_indented, c)
 
     candidates.sort(key=sort_key)
     best_pattern = candidates[0][0]
     best_count = candidates[0][1]
+
 
     if not best_pattern or best_count < 2:
         return None
