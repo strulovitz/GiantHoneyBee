@@ -538,11 +538,20 @@ Component to split: {task}"""
             temperature=0.3
         )
 
+        print(f"  [SPLIT] RAW LLM OUTPUT:")
+        print(f"  ---BEGIN---")
+        print(f"  {raw}")
+        print(f"  ---END---")
+
         from smart_splitter import smart_split
         result = smart_split(raw)
+        print(f"  [SPLIT] Parsed into {len(result)} subtasks")
+        for i, c in enumerate(result):
+            print(f"  [SPLIT] [{i+1}] {c[:100]}")
 
         max_expected = num_workers if num_workers else 4
         if len(result) < 2:
+            print(f"  [SPLIT] Too few items ({len(result)}), falling back to single subtask")
             result = [task]
         elif len(result) > max_expected * 2:
             print(f"  [WARNING] Split returned {len(result)} items "

@@ -511,11 +511,20 @@ Task: {task}"""
             temperature=0.3
         )
 
+        print(f"  [SPLIT] RAW LLM OUTPUT:")
+        print(f"  ---BEGIN---")
+        print(f"  {raw}")
+        print(f"  ---END---")
+
         from smart_splitter import smart_split
         components = smart_split(raw)
+        print(f"  [SPLIT] Parsed into {len(components)} components")
+        for i, c in enumerate(components):
+            print(f"  [SPLIT] [{i+1}] {c[:100]}")
 
         max_expected = num_components if num_components else 4
         if len(components) < 2:
+            print(f"  [SPLIT] Too few items ({len(components)}), falling back to single component")
             components = [task]
         elif len(components) > max_expected * 2:
             print(f"  [WARNING] Split returned {len(components)} items "
