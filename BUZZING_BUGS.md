@@ -3,7 +3,7 @@
 > **Found by:** Nir during Phase 2 LAN test on Desktop
 > **Files affected:** `dwarf_queen_client.py`, `raja_bee.py`, `giant_queen_client.py` — all have `_run_calibration()`
 
-**Status:** Bug 1 (simultaneous) — FIXED. Bug 2 (formula) — FIXED. Bug 3 (timing/cache) — **FIXED, CONFIRMED**. Bug 4 (quality score noise) — **NEW, NOT FIXED**.
+**Status:** Bug 1 — FIXED. Bug 2 — FIXED. Bug 3 (cache) — FIXED. Bug 4 (prompt) — FIXED. Bug 5 (polling) — **NOT FIXED**.
 
 ---
 
@@ -186,3 +186,73 @@ Removed "You are a worker bee" roleplay from the worker prompt. New prompt just 
 ### Files fixed
 
 `GiantHoneyBee/worker_client.py` — `_process_subtask()` method, the prompt template.
+
+---
+
+## Bug 5: DwarfQueen Polling Interval Corrupts Speed Measurement (2026-04-11)
+
+**Status: NOT FIXED**
+
+### Round 7 (cleaned prompts, all 4 previous bugs fixed)
+
+Quality: PERFECT. Both workers got quality=8.0. Judge raw response "8" for both. No bee roleplay. Bug 4 is confirmed dead.
+
+Speed: BUG 3 IS BACK — but it's a DIFFERENT root cause this time.
+
+```
+Actual worker processing times (from worker terminal logs):
+  worker_alpha: 3.3s
+  worker_bravo: 4.0s
+  → Alpha was actually FASTER
+
+DwarfQueen wall-clock measurements:
+  worker_alpha: 10.1s → speed=5.0
+  worker_bravo:  5.1s → speed=10.0
+  → DwarfQueen thinks bravo is 2x faster (WRONG)
+
+Buzzing: alpha = 5.0 * 8.0 = 40.0, bravo = 10.0 * 8.0 = 80.0
+Fractions: 0.333 vs 0.667
+```
+
+### Root cause: polling interval dominates measurement
+
+The DwarfQueen measures time from when she sends the calibration task to when she polls and sees the result completed. She polls every **5 seconds**. The actual processing is 3-4 seconds. So the measured time is:
+
+```
+measured_time = (time until next poll after result is ready)
+             = processing_time + (0 to 5 seconds of waiting for next poll)
+```
+
+If a worker finishes at 3.3s, and the next poll happens at 5.0s, the DwarfQueen sees ~5.1s.
+If a worker finishes at 3.3s, and the next poll happens at 10.0s, the DwarfQueen sees ~10.1s.
+
+The measurement is dominated by **when the result lands relative to the polling cycle**, not by actual processing speed. With a 5s poll interval and 3-4s processing time, the measurement has up to 5 seconds of random noise — more noise than signal.
+
+### Why the dummy cache reset appeared to fix this in Round 5/6
+
+In Rounds 5 and 6, both workers happened to land on the same polling boundary (both 10.1s). That was luck — the dummy reset didn't fix the polling problem, it just happened that both workers' results were picked up on the same poll cycle.
+
+### The fix
+
+The DwarfQueen should NOT use her own wall-clock polling time as the speed measurement. Instead, the **worker should report its own processing time** (which it already calculates — see worker_client.py `_process_subtask()` which records `processing_time = time.time() - start_time`). The worker posts this time to KillerBee via `post_component_result()`, and the DwarfQueen should read it from there.
+
+This way speed measurement reflects actual processing time (3.3s vs 4.0s) not polling artifacts (10.1s vs 5.1s).
+
+### Alternative: reduce polling interval
+
+Reducing poll interval from 5s to 1s would reduce the noise, but not eliminate it. Using the worker's self-reported time is more accurate.
+
+### Note on self-reported time and cheating
+
+In the BUZZING.md design doc, the principle is "nobody tests themselves — your boss tests you." Using worker self-reported time might seem to violate this. But the worker can't fake the actual LLM processing time — Ollama takes however long it takes. A worker COULD lie about its time, but:
+1. In the current setup (same-machine test), there's no incentive to cheat
+2. For production, the boss could compare self-reported time to her own wall-clock measurement as a sanity check
+3. The important anti-cheat is on QUALITY (boss judges), not speed (objective measurement)
+
+### Files to fix
+
+1. `GiantHoneyBee/dwarf_queen_client.py` — `_run_calibration()` scoring section
+2. `GiantHoneyBee/raja_bee.py` — `_run_calibration()` scoring section
+3. `GiantHoneyBee/giant_queen_client.py` — `_run_calibration()` scoring section
+
+Read `processing_time` from the component result via KillerBee API instead of using wall-clock polling time.
