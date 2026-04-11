@@ -113,8 +113,11 @@ class WorkerClient:
                         task = task_item.get("task", "")
                         original_task = task_item.get("original_task", task)
                         comp_type = task_item.get("component_type", "subtask")
-                        print(f"\n  [TASK {t_id}] Assigned to me ({comp_type}): "
-                              f"{task[:80]}...")
+                        print(f"\n  [TASK {t_id}] Assigned to me ({comp_type}):")
+                        print(f"  FULL QUESTION:")
+                        print(f"  ---BEGIN---")
+                        print(f"  {task}")
+                        print(f"  ---END---")
                         self._process_subtask(t_id, task, original_task)
                         found_work = True
                         break  # One at a time
@@ -167,6 +170,11 @@ Stay focused on answering your subtask in a way that is relevant to the original
 
 Your complete answer:"""
 
+        print(f"  [SUBTASK {subtask_id}] FULL PROMPT TO LLM:")
+        print(f"  ---BEGIN PROMPT---")
+        print(f"  {prompt}")
+        print(f"  ---END PROMPT---")
+
         result = self.ai.ask(
             prompt=prompt,
             model=self.model_name,
@@ -174,6 +182,11 @@ Your complete answer:"""
         )
 
         processing_time = time.time() - start_time
+
+        print(f"  [SUBTASK {subtask_id}] FULL ANSWER:")
+        print(f"  ---BEGIN---")
+        print(f"  {result}")
+        print(f"  ---END---")
 
         # Post result back to KillerBee
         try:
