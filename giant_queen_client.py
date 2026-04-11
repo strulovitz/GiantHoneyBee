@@ -205,7 +205,10 @@ class GiantQueenClient:
             model=self.model_name,
             temperature=0.7
         ).strip()
-        print(f"  [BUZZING] Calibration question: {test_question[:100]}...")
+        print(f"  [BUZZING] FULL CALIBRATION QUESTION:")
+        print(f"  ---BEGIN---")
+        print(f"  {test_question}")
+        print(f"  ---END---")
 
         # Sequential calibration — one subordinate at a time, with a dummy
         # reset question before each real measurement. The dummy overwrites
@@ -273,6 +276,10 @@ class GiantQueenClient:
                             }
                             print(f"  [BUZZING] {sub_name} completed "
                                   f"in {elapsed:.1f}s")
+                            print(f"  [BUZZING] {sub_name} FULL ANSWER:")
+                            print(f"  ---BEGIN---")
+                            print(f"  {comp_resp['result']}")
+                            print(f"  ---END---")
                             break
                     except:
                         pass
@@ -306,11 +313,17 @@ class GiantQueenClient:
                 f"Answer to rate:\n{r['result']}\n\n"
                 f"Reply with ONLY a single number from 1 to 10, nothing else."
             )
+            print(f"  [BUZZING] Judging {r['name']}...")
+            print(f"  [BUZZING] QUALITY PROMPT SENT TO JUDGE:")
+            print(f"  ---BEGIN PROMPT---")
+            print(f"  {quality_prompt}")
+            print(f"  ---END PROMPT---")
             quality_text = self.ai.ask(
                 prompt=quality_prompt,
                 model=self.model_name,
                 temperature=0.1
             ).strip()
+            print(f"  [BUZZING] JUDGE RAW RESPONSE: \"{quality_text}\"")
 
             try:
                 quality_score = float(
