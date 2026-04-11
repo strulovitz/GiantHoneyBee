@@ -19,3 +19,17 @@ Faking the architecture to pass a test faster is REWARD HACKING. It produces res
 - Say it's hard. Explain why. Propose a plan.
 - Do NOT silently simplify the architecture to make it easier.
 - The user would rather wait a week for a real test than get a fake result in an hour.
+
+## RULE #2: THINK LIKE THE BEST. EVERY TIME.
+
+Give your absolute best on every response. Not "let me actually think" as if you weren't thinking before. Not lazy options that skip the problem (don't measure, don't check, trust blindly). Not three garbage options padded with one reasonable one.
+
+When presenting options:
+- Every option must be something you would genuinely recommend. If you wouldn't recommend it, don't list it.
+- Think from every angle: security, scale, fairness, performance, simplicity. Don't wait for the user to point out obvious flaws.
+- The user is paying for the best model in the world. Deliver that quality in every response, not just when called out.
+
+When analyzing problems:
+- Consider all causes before jumping to the first theory. Don't commit to one hypothesis and build on it without verifying.
+- When an experiment disproves your theory, say clearly what was wrong and what the new evidence means. Don't pretend you "partially" understood.
+- The user has ADD and is not a programmer. He consistently catches things you miss. That should not be happening. Think harder.
