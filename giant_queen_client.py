@@ -508,47 +508,22 @@ class GiantQueenClient:
                 )
             fraction_instructions = "\n".join(fraction_lines)
 
-            prompt = f"""You are a coordinator splitting a task into exactly {num_subs} independent sub-components for separate teams.
+            prompt = f"""Split this into exactly {num_subs} independent sub-components.
 
-CRITICAL CONTEXT: The ORIGINAL QUESTION that started this whole process was:
-"{original_task}"
+Original question: "{original_task}"
+Component to split: {task}
 
-Your specific component to split is: {task}
-
-SIZE EACH SUB-COMPONENT PROPORTIONALLY:
+Size proportionally:
 {fraction_instructions}
 
-A sub-component with fraction 0.60 should be about 3x as much work as one with fraction 0.20.
-Larger fractions = broader scope. Smaller fractions = narrower, more focused.
-
-RULES:
-- Each sub-component must be INDEPENDENT
-- Each should be substantial enough for a team to work on
-- Together they must fully cover YOUR component
-- Every sub-component MUST stay relevant to the ORIGINAL QUESTION above
-- Do NOT drift into unrelated topics — always tie back to what was originally asked
-
-Return ONLY a JSON array of exactly {num_subs} strings.
-
-Your JSON array:"""
+Return ONLY a JSON array of exactly {num_subs} strings."""
         else:
-            prompt = f"""You are a coordinator splitting a task into 2-3 independent sub-components for separate teams.
+            prompt = f"""Split this into 2-3 independent sub-components.
 
-CRITICAL CONTEXT: The ORIGINAL QUESTION that started this whole process was:
-"{original_task}"
+Original question: "{original_task}"
+Component to split: {task}
 
-Your specific component to split is: {task}
-
-RULES:
-- Each sub-component must be INDEPENDENT
-- Each should be substantial enough for a team to work on
-- Together they must fully cover YOUR component
-- Every sub-component MUST stay relevant to the ORIGINAL QUESTION above
-- Do NOT drift into unrelated topics — always tie back to what was originally asked
-
-Return ONLY a JSON array of strings. Example: ["sub-component 1", "sub-component 2"]
-
-Your JSON array:"""
+Return ONLY a JSON array of strings. Example: ["sub-component 1", "sub-component 2"]"""
 
         result = self.ai.ask_for_json_list(
             prompt=prompt,
@@ -615,19 +590,15 @@ Your JSON array:"""
             formatted += f"{'='*40}\n"
             formatted += f"{result_text}\n"
 
-        prompt = f"""You are an editor combining results from {len(child_results)} teams into one coherent document.
+        prompt = f"""Combine these {len(child_results)} results into one answer.
 
-ORIGINAL QUESTION (what the user actually asked): {original_task}
+Original question: {original_task}
+This component: {component_task}
 
-YOUR SPECIFIC COMPONENT was: {component_task}
-
-Here are the sections from your teams:
+Results:
 {formatted}
 
-Combine into ONE well-organized document that answers YOUR COMPONENT in the context of the ORIGINAL QUESTION.
-Stay focused on what was actually asked. Integrate smoothly, remove redundancy, keep all important details.
-
-Your combined document:"""
+Combine into one coherent answer. Remove redundancy, keep all important details."""
 
         return self.ai.ask(
             prompt=prompt,

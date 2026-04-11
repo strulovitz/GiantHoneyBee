@@ -510,51 +510,22 @@ class DwarfQueenClient:
                 )
             fraction_instructions = "\n".join(fraction_lines)
 
-            prompt = f"""You are a team lead splitting a task into exactly {num_workers} small, specific subtasks that individual workers can complete independently.
+            prompt = f"""Split this into exactly {num_workers} independent subtasks.
 
-CRITICAL CONTEXT: The ORIGINAL QUESTION that started this whole process was:
-"{original_task}"
+Original question: "{original_task}"
+Component to split: {task}
 
-Your specific component to split into subtasks is: {task}
-
-SIZE EACH SUBTASK PROPORTIONALLY:
+Size proportionally:
 {fraction_instructions}
 
-A subtask with fraction 0.60 should be about 3x as much work as one with fraction 0.20.
-Larger fractions = broader scope. Smaller fractions = narrower, more focused.
-
-RULES:
-- Each subtask must be SMALL and SPECIFIC (a single focused question or action)
-- Each subtask must be INDEPENDENT (worker doesn't need other results)
-- Together they must fully cover YOUR component
-- Every subtask MUST stay relevant to the ORIGINAL QUESTION above
-- Do NOT drift into unrelated topics
-
-The task to split: {task}
-
-Return ONLY a JSON array of exactly {num_workers} strings.
-
-Your JSON array:"""
+Return ONLY a JSON array of exactly {num_workers} strings."""
         else:
-            prompt = f"""You are a team lead splitting a task into 2-4 small, specific subtasks that individual workers can complete independently.
+            prompt = f"""Split this into 2-4 independent subtasks.
 
-CRITICAL CONTEXT: The ORIGINAL QUESTION that started this whole process was:
-"{original_task}"
+Original question: "{original_task}"
+Component to split: {task}
 
-Your specific component to split into subtasks is: {task}
-
-RULES:
-- Each subtask must be SMALL and SPECIFIC (a single focused question or action)
-- Each subtask must be INDEPENDENT (worker doesn't need other results)
-- Together they must fully cover YOUR component
-- Every subtask MUST stay relevant to the ORIGINAL QUESTION above
-- Do NOT drift into unrelated topics — if the original question asks for pros and cons, the subtasks should be about pros and cons
-
-The task to split: {task}
-
-Return ONLY a JSON array of strings. Example: ["subtask 1", "subtask 2", "subtask 3"]
-
-Your JSON array:"""
+Return ONLY a JSON array of strings. Example: ["subtask 1", "subtask 2", "subtask 3"]"""
 
         result = self.ai.ask_for_json_list(
             prompt=prompt,
@@ -617,19 +588,15 @@ Your JSON array:"""
             formatted += f"\n--- Worker {i+1}: {task_desc[:60]} ---\n"
             formatted += f"{result_text}\n"
 
-        prompt = f"""You are combining results from {len(child_results)} workers into one coherent answer.
+        prompt = f"""Combine these {len(child_results)} results into one answer.
 
-ORIGINAL QUESTION (what the user actually asked): {original_task}
+Original question: {original_task}
+This component: {component_task}
 
-YOUR SPECIFIC COMPONENT was: {component_task}
-
-Worker results:
+Results:
 {formatted}
 
-Combine into ONE clear, complete answer that addresses YOUR COMPONENT in the context of the ORIGINAL QUESTION.
-Stay focused on what was actually asked. Integrate smoothly, remove redundancy, keep all important details.
-
-Your combined answer:"""
+Combine into one coherent answer. Remove redundancy, keep all important details."""
 
         return self.ai.ask(
             prompt=prompt,

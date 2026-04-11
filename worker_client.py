@@ -161,9 +161,7 @@ class WorkerClient:
         # Use local Ollama to process the subtask
         prompt = f"""{task}
 
-For context, this is part of a larger question: "{original_task}"
-
-Answer thoroughly and stay relevant to the context above."""
+Context: this is part of a larger question: "{original_task}" """
 
         print(f"  [SUBTASK {subtask_id}] FULL PROMPT TO LLM:")
         print(f"  ---BEGIN PROMPT---")

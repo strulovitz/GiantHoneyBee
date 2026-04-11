@@ -490,49 +490,22 @@ class RajaBee:
                 )
             fraction_instructions = "\n".join(fraction_lines)
 
-            prompt = f"""You are a SENIOR coordinator. Split this complex task into exactly {num_components} MAJOR independent components.
+            prompt = f"""Split this into exactly {num_components} independent components.
+Each covers a different part. Together they fully cover the task.
 
-CRITICAL: Every component MUST stay focused on answering the ORIGINAL QUESTION below.
-Do NOT drift into unrelated topics. Each component should address a DIFFERENT PART of what was asked,
-but every component must clearly relate back to the original question.
-
-SIZE EACH COMPONENT PROPORTIONALLY:
+Size proportionally:
 {fraction_instructions}
 
-A component with fraction 0.60 should be about 3x as much work as one with fraction 0.20.
-Larger fractions = broader scope, more aspects to cover. Smaller fractions = narrower, more focused.
+Task: {task}
 
-RULES:
-- Each component must be INDEPENDENT (can be completed without other components)
-- Each component should be SUBSTANTIAL (not a simple question)
-- Together, all components must fully cover the original task
-- Each component description MUST include the original question for context
-
-ORIGINAL QUESTION: {task}
-
-Return ONLY a JSON array of exactly {num_components} strings.
-Example: ["Analyze [aspect 1] in the context of: [original question]", "Analyze [aspect 2] in the context of: [original question]"]
-
-Your JSON array:"""
+Return ONLY a JSON array of exactly {num_components} strings."""
         else:
-            prompt = f"""You are a SENIOR coordinator. Split this complex task into 2-4 MAJOR independent components.
+            prompt = f"""Split this into 2-4 independent components.
+Each covers a different part. Together they fully cover the task.
 
-CRITICAL: Every component MUST stay focused on answering the ORIGINAL QUESTION below.
-Do NOT drift into unrelated topics. Each component should address a DIFFERENT PART of what was asked,
-but every component must clearly relate back to the original question.
+Task: {task}
 
-RULES:
-- Each component must be INDEPENDENT (can be completed without other components)
-- Each component should be SUBSTANTIAL (not a simple question)
-- Together, all components must fully cover the original task
-- Each component description MUST include the original question for context
-
-ORIGINAL QUESTION: {task}
-
-Return ONLY a JSON array of strings. Each string should say what aspect of the original question to focus on.
-Example: ["Analyze [aspect 1] in the context of: [original question]", "Analyze [aspect 2] in the context of: [original question]"]
-
-Your JSON array:"""
+Return ONLY a JSON array of strings."""
 
         components = self.ai.ask_for_json_list(
             prompt=prompt,
@@ -607,20 +580,14 @@ Your JSON array:"""
             formatted += f"{'='*40}\n"
             formatted += f"{result_text}\n"
 
-        prompt = f"""You are a SENIOR editor combining results from {len(component_results)} expert teams into one comprehensive final document.
+        prompt = f"""Combine these {len(component_results)} results into one answer.
 
-The original task was: {original_task}
+Original question: {original_task}
 
-Here are the completed sections from each team:
+Results:
 {formatted}
 
-Combine ALL sections into ONE well-organized, coherent final document.
-- Integrate smoothly, do NOT just concatenate
-- Remove redundancy
-- Organize with clear headings and logical flow
-- Keep ALL important details from every section
-
-Your combined final document:"""
+Combine into one coherent answer. Remove redundancy, keep all important details."""
 
         return self.ai.ask(
             prompt=prompt,
