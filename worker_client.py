@@ -159,16 +159,11 @@ class WorkerClient:
         print(f"  [SUBTASK {subtask_id}] Processing with {self.model_name}...")
 
         # Use local Ollama to process the subtask
-        prompt = f"""You are a worker bee. Answer this task completely and thoroughly.
+        prompt = f"""{task}
 
-IMPORTANT CONTEXT: The ORIGINAL QUESTION that this subtask is part of was:
-"{original_task}"
+For context, this is part of a larger question: "{original_task}"
 
-Your specific subtask to answer: {task}
-
-Stay focused on answering your subtask in a way that is relevant to the original question above.
-
-Your complete answer:"""
+Answer thoroughly and stay relevant to the context above."""
 
         print(f"  [SUBTASK {subtask_id}] FULL PROMPT TO LLM:")
         print(f"  ---BEGIN PROMPT---")
