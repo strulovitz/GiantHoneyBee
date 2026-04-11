@@ -3,7 +3,7 @@
 > **Found by:** Nir during Phase 2 LAN test on Desktop
 > **Files affected:** `dwarf_queen_client.py`, `raja_bee.py`, `giant_queen_client.py` — all have `_run_calibration()`
 
-**Status:** Bug 1 (simultaneous) — FIXED. Bug 2 (formula) — FIXED. Bug 3 (timing inconsistency) — ROOT CAUSE FOUND, FIX PROVEN, implementation pending.
+**Status:** Bug 1 (simultaneous) — FIXED. Bug 2 (formula) — FIXED. Bug 3 (timing/cache) — **FIXED, CONFIRMED**. Bug 4 (quality score noise) — **NEW, NOT FIXED**.
 
 ---
 
@@ -105,3 +105,85 @@ Before sending the real calibration question to each subordinate, send a short d
 3. `GiantHoneyBee/giant_queen_client.py` — `_run_calibration()`
 
 In each file, before each real calibration task, send a dummy question through the same KillerBee calibration API. Wait for the dummy to complete (discard result), then send the real question and measure time.
+
+---
+
+## Bug 4: Quality Score Noise From Small LLM Judge — NEW (2026-04-11)
+
+**Status: NOT FIXED**
+
+### What happened (Round 5 — after dummy cache reset fix, 2026-04-11)
+
+**Full data from all 3 terminals on Desktop:**
+
+Worker Alpha processing log:
+```
+TASK 1 (calibration dummy): "Name three colors of the rainbow. Reply in three words only."
+  → Completed in 0.2s (dummy, discarded)
+TASK 2 (calibration real):  "What are the key factors that contribute to urban heat islands..."
+  → Completed in 3.4s (ACTUAL processing time)
+```
+
+Worker Bravo processing log:
+```
+TASK 3 (calibration dummy): "Name three colors of the rainbow. Reply in three words only."
+  → Completed in 0.5s (dummy, discarded)
+TASK 4 (calibration real):  "What are the key factors that contribute to urban heat islands..."
+  → Completed in 3.5s (ACTUAL processing time)
+```
+
+DwarfQueen measured times (wall-clock including polling + network):
+```
+worker_alpha: 10.1s → speed=10.0
+worker_bravo: 10.1s → speed=10.0
+```
+
+**Speed is PERFECT.** Actual worker processing: 3.4s vs 3.5s — essentially identical. The DwarfQueen sees 10.1s for both because her measurement includes network round-trips (Desktop→Laptop KillerBee→Desktop worker) plus the 5-second polling interval. But the RELATIVE measurement is fair — both 10.1s, both speed=10.0. Bug 3 is fully solved.
+
+**Quality scores are the problem:**
+```
+worker_alpha: quality=2.0  (judged by DwarfQueen's llama3.2:3b)
+worker_bravo: quality=6.0  (judged by DwarfQueen's llama3.2:3b)
+
+Buzzing: alpha = 10.0 * 2.0 = 20.0
+         bravo = 10.0 * 6.0 = 60.0
+Fractions: 0.250 vs 0.750
+```
+
+Identical workers, identical model, identical question, nearly identical processing time — but the quality judge gave scores of 2 and 6. This 4-point gap created a 3:1 work split.
+
+### Why this happens
+
+- The DwarfQueen uses llama3.2:3b to judge quality of answers from workers ALSO running llama3.2:3b — a 3B model rating another 3B model's output
+- Small models asked to "rate from 1-10" produce inconsistent, noisy scores
+- The same model judging two similar-quality answers from the same model can easily give 2 to one and 6 to the other — essentially random
+- This noise completely dominates the buzzing score when speed scores are equal (as they should be for identical workers)
+
+### The impact
+
+With equal speed scores (both 10.0), the fractions are determined entirely by quality:
+- alpha buzzing: 10.0 * 2.0 = 20.0
+- bravo buzzing: 10.0 * 6.0 = 60.0
+- Fractions: 20/80 = 0.250 vs 60/80 = 0.750
+
+A random quality score difference of 4 points created a 3:1 work split for identical workers.
+
+### Possible fixes
+
+1. **Average multiple quality judgments:** Have the boss LLM rate each answer 3 times, take the average. Reduces noise but 3x the LLM calls.
+
+2. **Relative ranking instead of absolute scoring:** Instead of "rate this answer 1-10", ask "which of these two answers is better?" Pairwise comparison is easier for small LLMs than absolute scoring. But doesn't scale well to many workers.
+
+3. **Skip quality scoring for same-model workers:** If the boss and workers all run the same model, quality differences are noise. Use speed-only scoring. Only use quality when the boss runs a genuinely better model than the workers.
+
+4. **Clamp quality range:** If all quality scores are within N points of each other (e.g., all between 4-8), treat them as equal. Only let quality affect fractions when there's a large gap (e.g., one answer is genuinely garbage scoring 1 while others score 7+).
+
+5. **Use quality as a pass/fail gate:** Quality below threshold (e.g., 3) = worker is broken/misconfigured, exclude them. Quality above threshold = all workers are "good enough", use speed-only fractions.
+
+### Decision needed from Nir
+
+The speed measurement is now perfect. The remaining unfairness is entirely from quality score noise. What approach should we take?
+
+### Files to fix
+
+Same 3 files: `dwarf_queen_client.py`, `raja_bee.py`, `giant_queen_client.py` — the scoring section of `_run_calibration()`.
