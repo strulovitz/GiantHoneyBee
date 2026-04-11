@@ -205,110 +205,55 @@ class GiantQueenClient:
             model=self.model_name,
             temperature=0.7
         ).strip()
-        print(f"  [BUZZING] Calibration question 1: {test_question[:100]}...")
+        print(f"  [BUZZING] Calibration question: {test_question[:100]}...")
 
-        # Two-round reversed-order calibration to cancel out order bias.
-        # Ollama internal caching makes the second worker tested always faster.
-        # By testing A,B then B,A and averaging, the bias cancels out.
-
-        def _calibrate_sequential(subs, question, round_label):
-            """Send calibration to each sub sequentially, return times and results."""
-            round_times = {}
-            round_results = {}
-            for sub in subs:
-                sub_id = sub.get("member_id") or sub.get("id")
-                sub_name = sub.get("username", f"member-{sub_id}")
-                try:
-                    print(f"  [BUZZING] {round_label}: Sending to {sub_name}...")
-                    start_time = time.time()
-                    cal_data = self.kb._request(
-                        "POST", f"/api/member/{sub_id}/calibration", {
-                            "task": question,
-                            "component_type": "calibration"
-                        }
-                    )
-                    comp_id = cal_data.get("component_id") or cal_data.get("id")
-                    max_wait = 600
-                    waited = 0
-                    while waited < max_wait:
-                        time.sleep(self.poll_interval)
-                        waited += self.poll_interval
-                        try:
-                            comp_resp = self.kb._request(
-                                "GET", f"/api/component/{comp_id}/status"
-                            )
-                            if (comp_resp.get("status") == "completed"
-                                    and comp_resp.get("result")):
-                                elapsed = time.time() - start_time
-                                round_times[sub_id] = elapsed
-                                round_results[sub_id] = {
-                                    "result": comp_resp["result"],
-                                    "name": sub_name
-                                }
-                                print(f"  [BUZZING] {round_label}: {sub_name} "
-                                      f"completed in {elapsed:.1f}s")
-                                break
-                        except:
-                            pass
-                        print(f"  [BUZZING] Waiting for {sub_name}... "
-                              f"({waited}s)", end="\r")
-                    else:
-                        print(f"  [BUZZING] {sub_name} timed out")
-                except Exception as e:
-                    print(f"  [BUZZING] Failed for {sub_name}: {e}")
-            return round_times, round_results
-
-        # Round 1: test in original order
-        print("  [BUZZING] === Round 1 (forward order) ===")
-        r1_times, r1_results = _calibrate_sequential(
-            self.subordinates, test_question, "Round 1")
-
-        # Generate a DIFFERENT question for round 2 to avoid prompt caching
-        print("  [BUZZING] Generating calibration question 2...")
-        test_question_2 = self.ai.ask(
-            prompt=("Generate a short test question that requires a detailed "
-                    "2-paragraph answer about a DIFFERENT topic than this: "
-                    f"\"{test_question[:80]}\". Just output the question, "
-                    "nothing else."),
-            model=self.model_name,
-            temperature=0.7
-        ).strip()
-        print(f"  [BUZZING] Calibration question 2: {test_question_2[:100]}...")
-
-        # Round 2: test in REVERSE order
-        print("  [BUZZING] === Round 2 (reverse order) ===")
-        r2_times, r2_results = _calibrate_sequential(
-            list(reversed(self.subordinates)), test_question_2, "Round 2")
-
-        # Average times across both rounds for fair measurement
+        # Sequential calibration — one subordinate at a time so each gets
+        # exclusive Ollama access. Known issue: Ollama response times vary
+        # ~2x between runs (caching/GPU state). Research needed for fix.
         results = {}
         for sub in self.subordinates:
             sub_id = sub.get("member_id") or sub.get("id")
             sub_name = sub.get("username", f"member-{sub_id}")
-            if sub_id in r1_times and sub_id in r2_times:
-                avg_time = (r1_times[sub_id] + r2_times[sub_id]) / 2
-                print(f"  [BUZZING] {sub_name}: round1={r1_times[sub_id]:.1f}s, "
-                      f"round2={r2_times[sub_id]:.1f}s, avg={avg_time:.1f}s")
-                results[sub_id] = {
-                    "result": r2_results[sub_id]["result"],
-                    "question": test_question_2,
-                    "elapsed_time": avg_time,
-                    "name": sub_name
-                }
-            elif sub_id in r1_times:
-                results[sub_id] = {
-                    "result": r1_results[sub_id]["result"],
-                    "question": test_question,
-                    "elapsed_time": r1_times[sub_id],
-                    "name": sub_name
-                }
-            elif sub_id in r2_times:
-                results[sub_id] = {
-                    "result": r2_results[sub_id]["result"],
-                    "question": test_question_2,
-                    "elapsed_time": r2_times[sub_id],
-                    "name": sub_name
-                }
+            try:
+                print(f"  [BUZZING] Sending calibration to {sub_name}...")
+                start_time = time.time()
+                cal_data = self.kb._request(
+                    "POST", f"/api/member/{sub_id}/calibration", {
+                        "task": test_question,
+                        "component_type": "calibration"
+                    }
+                )
+                comp_id = cal_data.get("component_id") or cal_data.get("id")
+                max_wait = 600
+                waited = 0
+                while waited < max_wait:
+                    time.sleep(self.poll_interval)
+                    waited += self.poll_interval
+                    try:
+                        comp_resp = self.kb._request(
+                            "GET", f"/api/component/{comp_id}/status"
+                        )
+                        if (comp_resp.get("status") == "completed"
+                                and comp_resp.get("result")):
+                            elapsed = time.time() - start_time
+                            results[sub_id] = {
+                                "result": comp_resp["result"],
+                                "elapsed_time": elapsed,
+                                "name": sub_name
+                            }
+                            print(f"  [BUZZING] {sub_name} completed "
+                                  f"in {elapsed:.1f}s")
+                            break
+                    except:
+                        pass
+                    print(f"  [BUZZING] Waiting for {sub_name}... "
+                          f"({waited}s)", end="\r")
+                else:
+                    print(f"  [BUZZING] {sub_name} timed out after "
+                          f"{max_wait}s")
+            except Exception as e:
+                print(f"  [BUZZING] Failed to send calibration to "
+                      f"{sub_name}: {e}")
 
         if not results:
             print("  [BUZZING] No calibration results received. Skipping.")
@@ -318,7 +263,6 @@ class GiantQueenClient:
 
         times = {sid: r["elapsed_time"] for sid, r in results.items()}
         fastest = min(times.values())
-        slowest = max(times.values())
 
         for sub_id, r in results.items():
             elapsed = r["elapsed_time"]
@@ -328,7 +272,7 @@ class GiantQueenClient:
 
             quality_prompt = (
                 f"Rate the following answer from 1 to 10 for completeness "
-                f"and accuracy. The question was: \"{r['question']}\"\n\n"
+                f"and accuracy. The question was: \"{test_question}\"\n\n"
                 f"Answer to rate:\n{r['result']}\n\n"
                 f"Reply with ONLY a single number from 1 to 10, nothing else."
             )
