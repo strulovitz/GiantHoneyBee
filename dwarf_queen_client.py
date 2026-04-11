@@ -519,35 +519,30 @@ class DwarfQueenClient:
                 )
             fraction_instructions = "\n".join(fraction_lines)
 
-            prompt = f"""Split this into exactly {num_workers} parts. Each part is one plain text sentence describing what to research or answer. No nested objects, no pros/cons — just {num_workers} simple sentences.
+            prompt = f"""Split this into exactly {num_workers} parts.
 
 Original question: "{original_task}"
 Component to split: {task}
 
 Size proportionally:
-{fraction_instructions}
-
-Example format: ["Research aspect A", "Analyze aspect B"]
-
-Return ONLY a JSON array of exactly {num_workers} strings:"""
+{fraction_instructions}"""
         else:
-            prompt = f"""Split this into 2-4 parts. Each part is one plain text sentence describing what to research or answer. No nested objects, no pros/cons — just 2-4 simple sentences.
+            prompt = f"""Split this into 2-4 parts.
 
 Original question: "{original_task}"
-Component to split: {task}
+Component to split: {task}"""
 
-Example format: ["Research aspect A", "Analyze aspect B", "Compare C and D"]
-
-Return ONLY a JSON array of strings:"""
-
-        result = self.ai.ask_for_json_list(
+        raw = self.ai.ask(
             prompt=prompt,
             model=self.model_name,
             temperature=0.3
         )
 
+        from smart_splitter import smart_split
+        result = smart_split(raw)
+
         max_expected = num_workers if num_workers else 4
-        if not result or len(result) < 2:
+        if len(result) < 2:
             result = [task]
         elif len(result) > max_expected * 2:
             print(f"  [WARNING] Split returned {len(result)} items "
