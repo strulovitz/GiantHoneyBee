@@ -205,92 +205,107 @@ class GiantQueenClient:
             model=self.model_name,
             temperature=0.7
         ).strip()
-        print(f"  [BUZZING] Calibration question: {test_question[:100]}...")
+        print(f"  [BUZZING] Calibration question 1: {test_question[:100]}...")
 
-        # Warmup round: send a tiny task to each subordinate so Ollama loads
-        # the model into memory. Without this, the first worker tested is
-        # always slower (cold model load) and gets unfairly penalized.
-        print("  [BUZZING] Warmup round — loading models on all subordinates...")
-        for sub in self.subordinates:
-            sub_id = sub.get("member_id") or sub.get("id")
-            sub_name = sub.get("username", f"member-{sub_id}")
-            try:
-                cal_data = self.kb._request(
-                    "POST", f"/api/member/{sub_id}/calibration", {
-                        "task": "Warmup: reply with one word.",
-                        "component_type": "calibration"
-                    }
-                )
-                comp_id = cal_data.get("component_id") or cal_data.get("id")
-                # Wait for warmup to complete
-                waited = 0
-                while waited < 120:
-                    time.sleep(self.poll_interval)
-                    waited += self.poll_interval
-                    try:
-                        resp = self.kb._request(
-                            "GET", f"/api/component/{comp_id}/status"
-                        )
-                        if resp.get("status") == "completed":
-                            print(f"  [BUZZING] {sub_name} warmed up")
-                            break
-                    except:
-                        pass
-            except Exception as e:
-                print(f"  [BUZZING] Warmup failed for {sub_name}: {e}")
-        print("  [BUZZING] Warmup complete. Starting real calibration...")
+        # Two-round reversed-order calibration to cancel out order bias.
+        # Ollama internal caching makes the second worker tested always faster.
+        # By testing A,B then B,A and averaging, the bias cancels out.
 
-        # Send calibration SEQUENTIALLY — one at a time so each subordinate
-        # gets exclusive Ollama access for fair timing measurement
+        def _calibrate_sequential(subs, question, round_label):
+            """Send calibration to each sub sequentially, return times and results."""
+            round_times = {}
+            round_results = {}
+            for sub in subs:
+                sub_id = sub.get("member_id") or sub.get("id")
+                sub_name = sub.get("username", f"member-{sub_id}")
+                try:
+                    print(f"  [BUZZING] {round_label}: Sending to {sub_name}...")
+                    start_time = time.time()
+                    cal_data = self.kb._request(
+                        "POST", f"/api/member/{sub_id}/calibration", {
+                            "task": question,
+                            "component_type": "calibration"
+                        }
+                    )
+                    comp_id = cal_data.get("component_id") or cal_data.get("id")
+                    max_wait = 600
+                    waited = 0
+                    while waited < max_wait:
+                        time.sleep(self.poll_interval)
+                        waited += self.poll_interval
+                        try:
+                            comp_resp = self.kb._request(
+                                "GET", f"/api/component/{comp_id}/status"
+                            )
+                            if (comp_resp.get("status") == "completed"
+                                    and comp_resp.get("result")):
+                                elapsed = time.time() - start_time
+                                round_times[sub_id] = elapsed
+                                round_results[sub_id] = {
+                                    "result": comp_resp["result"],
+                                    "name": sub_name
+                                }
+                                print(f"  [BUZZING] {round_label}: {sub_name} "
+                                      f"completed in {elapsed:.1f}s")
+                                break
+                        except:
+                            pass
+                        print(f"  [BUZZING] Waiting for {sub_name}... "
+                              f"({waited}s)", end="\r")
+                    else:
+                        print(f"  [BUZZING] {sub_name} timed out")
+                except Exception as e:
+                    print(f"  [BUZZING] Failed for {sub_name}: {e}")
+            return round_times, round_results
+
+        # Round 1: test in original order
+        print("  [BUZZING] === Round 1 (forward order) ===")
+        r1_times, r1_results = _calibrate_sequential(
+            self.subordinates, test_question, "Round 1")
+
+        # Generate a DIFFERENT question for round 2 to avoid prompt caching
+        print("  [BUZZING] Generating calibration question 2...")
+        test_question_2 = self.ai.ask(
+            prompt=("Generate a short test question that requires a detailed "
+                    "2-paragraph answer about a DIFFERENT topic than this: "
+                    f"\"{test_question[:80]}\". Just output the question, "
+                    "nothing else."),
+            model=self.model_name,
+            temperature=0.7
+        ).strip()
+        print(f"  [BUZZING] Calibration question 2: {test_question_2[:100]}...")
+
+        # Round 2: test in REVERSE order
+        print("  [BUZZING] === Round 2 (reverse order) ===")
+        r2_times, r2_results = _calibrate_sequential(
+            list(reversed(self.subordinates)), test_question_2, "Round 2")
+
+        # Average times across both rounds for fair measurement
         results = {}
         for sub in self.subordinates:
             sub_id = sub.get("member_id") or sub.get("id")
             sub_name = sub.get("username", f"member-{sub_id}")
-            try:
-                print(f"  [BUZZING] Sending calibration to {sub_name}...")
-                start_time = time.time()
-                cal_data = self.kb._request(
-                    "POST", f"/api/member/{sub_id}/calibration", {
-                        "task": test_question,
-                        "component_type": "calibration"
-                    }
-                )
-                comp_id = cal_data.get("component_id") or cal_data.get("id")
-                print(f"  [BUZZING] Sent calibration to {sub_name} "
-                      f"(component_id={comp_id})")
-
-                # Wait for THIS subordinate to complete before sending next
-                max_wait = 600
-                waited = 0
-                while waited < max_wait:
-                    time.sleep(self.poll_interval)
-                    waited += self.poll_interval
-                    try:
-                        comp_resp = self.kb._request(
-                            "GET",
-                            f"/api/component/{comp_id}/status"
-                        )
-                        if (comp_resp.get("status") == "completed"
-                                and comp_resp.get("result")):
-                            elapsed = time.time() - start_time
-                            results[sub_id] = {
-                                "result": comp_resp["result"],
-                                "elapsed_time": elapsed,
-                                "name": sub_name
-                            }
-                            print(f"  [BUZZING] {sub_name} completed "
-                                  f"in {elapsed:.1f}s")
-                            break
-                    except Exception as e:
-                        pass
-                    print(f"  [BUZZING] Waiting for {sub_name}... "
-                          f"({waited}s elapsed)", end="\r")
-                else:
-                    print(f"  [BUZZING] {sub_name} timed out after "
-                          f"{max_wait}s")
-            except Exception as e:
-                print(f"  [BUZZING] Failed to send calibration to "
-                      f"{sub_name}: {e}")
+            if sub_id in r1_times and sub_id in r2_times:
+                avg_time = (r1_times[sub_id] + r2_times[sub_id]) / 2
+                print(f"  [BUZZING] {sub_name}: round1={r1_times[sub_id]:.1f}s, "
+                      f"round2={r2_times[sub_id]:.1f}s, avg={avg_time:.1f}s")
+                results[sub_id] = {
+                    "result": r2_results[sub_id]["result"],
+                    "elapsed_time": avg_time,
+                    "name": sub_name
+                }
+            elif sub_id in r1_times:
+                results[sub_id] = {
+                    "result": r1_results[sub_id]["result"],
+                    "elapsed_time": r1_times[sub_id],
+                    "name": sub_name
+                }
+            elif sub_id in r2_times:
+                results[sub_id] = {
+                    "result": r2_results[sub_id]["result"],
+                    "elapsed_time": r2_times[sub_id],
+                    "name": sub_name
+                }
 
         if not results:
             print("  [BUZZING] No calibration results received. Skipping.")
