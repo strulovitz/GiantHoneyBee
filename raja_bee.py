@@ -221,14 +221,15 @@ class RajaBee:
         ).strip()
         print(f"  [BUZZING] Calibration question: {test_question[:100]}...")
 
-        # Step 2: Post calibration task to each subordinate via KillerBee
-        # We create a calibration component for each subordinate
-        calibration_tasks = {}  # member_id -> {component_id, start_time}
+        # Step 2: Send calibration SEQUENTIALLY — one at a time so each
+        # subordinate gets exclusive Ollama access for fair timing measurement
+        results = {}
         for sub in self.subordinates:
             sub_id = sub.get("member_id") or sub.get("id")
             sub_name = sub.get("username", f"member-{sub_id}")
             try:
-                # Post a calibration component assigned to this subordinate
+                print(f"  [BUZZING] Sending calibration to {sub_name}...")
+                start_time = time.time()
                 cal_data = self.kb._request(
                     "POST", f"/api/member/{sub_id}/calibration", {
                         "task": test_question,
@@ -236,63 +237,41 @@ class RajaBee:
                     }
                 )
                 comp_id = cal_data.get("component_id") or cal_data.get("id")
-                calibration_tasks[sub_id] = {
-                    "component_id": comp_id,
-                    "name": sub_name,
-                    "start_time": time.time()
-                }
                 print(f"  [BUZZING] Sent calibration to {sub_name} "
                       f"(component_id={comp_id})")
+
+                # Wait for THIS subordinate to complete before sending next
+                max_wait = 600
+                waited = 0
+                while waited < max_wait:
+                    time.sleep(self.poll_interval)
+                    waited += self.poll_interval
+                    try:
+                        comp_resp = self.kb._request(
+                            "GET",
+                            f"/api/component/{comp_id}/status"
+                        )
+                        if (comp_resp.get("status") == "completed"
+                                and comp_resp.get("result")):
+                            elapsed = time.time() - start_time
+                            results[sub_id] = {
+                                "result": comp_resp["result"],
+                                "elapsed_time": elapsed,
+                                "name": sub_name
+                            }
+                            print(f"  [BUZZING] {sub_name} completed "
+                                  f"in {elapsed:.1f}s")
+                            break
+                    except Exception as e:
+                        pass
+                    print(f"  [BUZZING] Waiting for {sub_name}... "
+                          f"({waited}s elapsed)", end="\r")
+                else:
+                    print(f"  [BUZZING] {sub_name} timed out after "
+                          f"{max_wait}s")
             except Exception as e:
                 print(f"  [BUZZING] Failed to send calibration to "
                       f"{sub_name}: {e}")
-
-        if not calibration_tasks:
-            print("  [BUZZING] No calibration tasks sent. Skipping.")
-            return
-
-        # Step 3: Wait for all subordinates to complete
-        print("  [BUZZING] Waiting for all subordinates to complete "
-              "calibration...")
-        results = {}  # member_id -> {result, elapsed_time}
-        max_wait = 600  # 10 minutes max for calibration
-        waited = 0
-
-        while waited < max_wait:
-            time.sleep(self.poll_interval)
-            waited += self.poll_interval
-
-            all_done = True
-            for sub_id, cal_info in calibration_tasks.items():
-                if sub_id in results:
-                    continue  # Already got this one
-                try:
-                    comp_resp = self.kb._request(
-                        "GET",
-                        f"/api/component/{cal_info['component_id']}/status"
-                    )
-                    if (comp_resp.get("status") == "completed"
-                            and comp_resp.get("result")):
-                        elapsed = time.time() - cal_info["start_time"]
-                        results[sub_id] = {
-                            "result": comp_resp["result"],
-                            "elapsed_time": elapsed,
-                            "name": cal_info["name"]
-                        }
-                        print(f"  [BUZZING] {cal_info['name']} completed "
-                              f"in {elapsed:.1f}s")
-                    else:
-                        all_done = False
-                except Exception as e:
-                    all_done = False
-
-            if all_done:
-                break
-
-            completed = len(results)
-            total = len(calibration_tasks)
-            print(f"  [BUZZING] Waiting... {completed}/{total} done "
-                  f"({waited}s elapsed)", end="\r")
 
         if not results:
             print("  [BUZZING] No calibration results received. Skipping.")
@@ -308,13 +287,8 @@ class RajaBee:
 
         for sub_id, r in results.items():
             elapsed = r["elapsed_time"]
-            if slowest == fastest:
-                speed_score = 10.0  # All same speed
-            else:
-                # Linear interpolation: fastest=10, slowest=1
-                speed_score = 10.0 - 9.0 * (
-                    (elapsed - fastest) / (slowest - fastest)
-                )
+            # Proportional speed: fastest gets 10, 2x slower gets 5, etc.
+            speed_score = 10.0 * (fastest / elapsed)
             speed_score = round(max(1.0, min(10.0, speed_score)), 1)
 
             # Judge quality using own LLM

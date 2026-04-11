@@ -207,11 +207,15 @@ class GiantQueenClient:
         ).strip()
         print(f"  [BUZZING] Calibration question: {test_question[:100]}...")
 
-        calibration_tasks = {}
+        # Send calibration SEQUENTIALLY — one at a time so each subordinate
+        # gets exclusive Ollama access for fair timing measurement
+        results = {}
         for sub in self.subordinates:
             sub_id = sub.get("member_id") or sub.get("id")
             sub_name = sub.get("username", f"member-{sub_id}")
             try:
+                print(f"  [BUZZING] Sending calibration to {sub_name}...")
+                start_time = time.time()
                 cal_data = self.kb._request(
                     "POST", f"/api/member/{sub_id}/calibration", {
                         "task": test_question,
@@ -219,62 +223,41 @@ class GiantQueenClient:
                     }
                 )
                 comp_id = cal_data.get("component_id") or cal_data.get("id")
-                calibration_tasks[sub_id] = {
-                    "component_id": comp_id,
-                    "name": sub_name,
-                    "start_time": time.time()
-                }
                 print(f"  [BUZZING] Sent calibration to {sub_name} "
                       f"(component_id={comp_id})")
+
+                # Wait for THIS subordinate to complete before sending next
+                max_wait = 600
+                waited = 0
+                while waited < max_wait:
+                    time.sleep(self.poll_interval)
+                    waited += self.poll_interval
+                    try:
+                        comp_resp = self.kb._request(
+                            "GET",
+                            f"/api/component/{comp_id}/status"
+                        )
+                        if (comp_resp.get("status") == "completed"
+                                and comp_resp.get("result")):
+                            elapsed = time.time() - start_time
+                            results[sub_id] = {
+                                "result": comp_resp["result"],
+                                "elapsed_time": elapsed,
+                                "name": sub_name
+                            }
+                            print(f"  [BUZZING] {sub_name} completed "
+                                  f"in {elapsed:.1f}s")
+                            break
+                    except Exception as e:
+                        pass
+                    print(f"  [BUZZING] Waiting for {sub_name}... "
+                          f"({waited}s elapsed)", end="\r")
+                else:
+                    print(f"  [BUZZING] {sub_name} timed out after "
+                          f"{max_wait}s")
             except Exception as e:
                 print(f"  [BUZZING] Failed to send calibration to "
                       f"{sub_name}: {e}")
-
-        if not calibration_tasks:
-            print("  [BUZZING] No calibration tasks sent. Skipping.")
-            return
-
-        print("  [BUZZING] Waiting for all subordinates to complete "
-              "calibration...")
-        results = {}
-        max_wait = 600
-        waited = 0
-
-        while waited < max_wait:
-            time.sleep(self.poll_interval)
-            waited += self.poll_interval
-
-            all_done = True
-            for sub_id, cal_info in calibration_tasks.items():
-                if sub_id in results:
-                    continue
-                try:
-                    comp_resp = self.kb._request(
-                        "GET",
-                        f"/api/component/{cal_info['component_id']}/status"
-                    )
-                    if (comp_resp.get("status") == "completed"
-                            and comp_resp.get("result")):
-                        elapsed = time.time() - cal_info["start_time"]
-                        results[sub_id] = {
-                            "result": comp_resp["result"],
-                            "elapsed_time": elapsed,
-                            "name": cal_info["name"]
-                        }
-                        print(f"  [BUZZING] {cal_info['name']} completed "
-                              f"in {elapsed:.1f}s")
-                    else:
-                        all_done = False
-                except Exception as e:
-                    all_done = False
-
-            if all_done:
-                break
-
-            completed = len(results)
-            total = len(calibration_tasks)
-            print(f"  [BUZZING] Waiting... {completed}/{total} done "
-                  f"({waited}s elapsed)", end="\r")
 
         if not results:
             print("  [BUZZING] No calibration results received. Skipping.")
@@ -288,12 +271,8 @@ class GiantQueenClient:
 
         for sub_id, r in results.items():
             elapsed = r["elapsed_time"]
-            if slowest == fastest:
-                speed_score = 10.0
-            else:
-                speed_score = 10.0 - 9.0 * (
-                    (elapsed - fastest) / (slowest - fastest)
-                )
+            # Proportional speed: fastest gets 10, 2x slower gets 5, etc.
+            speed_score = 10.0 * (fastest / elapsed)
             speed_score = round(max(1.0, min(10.0, speed_score)), 1)
 
             quality_prompt = (
