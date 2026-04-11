@@ -207,14 +207,44 @@ class GiantQueenClient:
         ).strip()
         print(f"  [BUZZING] Calibration question: {test_question[:100]}...")
 
-        # Sequential calibration — one subordinate at a time so each gets
-        # exclusive Ollama access. Known issue: Ollama response times vary
-        # ~2x between runs (caching/GPU state). Research needed for fix.
+        # Sequential calibration — one subordinate at a time, with a dummy
+        # reset question before each real measurement. The dummy overwrites
+        # the LLM backend's prompt cache so the real question gets a full,
+        # fair evaluation. Without this, the second worker tested is ~2-3x
+        # faster due to cached prompt tokens. See BUZZING_BUGS.md.
+        dummy_question = "Name three colors of the rainbow. Reply in three words only."
         results = {}
         for sub in self.subordinates:
             sub_id = sub.get("member_id") or sub.get("id")
             sub_name = sub.get("username", f"member-{sub_id}")
             try:
+                # Dummy reset: flush LLM prompt cache with unrelated question
+                print(f"  [BUZZING] Resetting cache for {sub_name}...")
+                try:
+                    dummy_data = self.kb._request(
+                        "POST", f"/api/member/{sub_id}/calibration", {
+                            "task": dummy_question,
+                            "component_type": "calibration"
+                        }
+                    )
+                    dummy_comp_id = dummy_data.get("component_id") or dummy_data.get("id")
+                    dummy_waited = 0
+                    while dummy_waited < 120:
+                        time.sleep(self.poll_interval)
+                        dummy_waited += self.poll_interval
+                        try:
+                            dummy_resp = self.kb._request(
+                                "GET", f"/api/component/{dummy_comp_id}/status"
+                            )
+                            if dummy_resp.get("status") == "completed":
+                                print(f"  [BUZZING] Cache reset for {sub_name}")
+                                break
+                        except:
+                            pass
+                except Exception as e:
+                    print(f"  [BUZZING] Cache reset failed for {sub_name}: {e}")
+
+                # Real calibration measurement
                 print(f"  [BUZZING] Sending calibration to {sub_name}...")
                 start_time = time.time()
                 cal_data = self.kb._request(
