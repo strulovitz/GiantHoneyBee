@@ -249,7 +249,7 @@ class RajaBee:
                         dummy_data = self.kb._request(
                             "POST", f"/api/member/{sub_id}/calibration", {
                                 "task": dummy_question,
-                                "component_type": "calibration"
+                                "component_type": "task"
                             }
                         )
                         dummy_comp_id = dummy_data.get("component_id") or dummy_data.get("id")
@@ -274,7 +274,7 @@ class RajaBee:
                     cal_data = self.kb._request(
                         "POST", f"/api/member/{sub_id}/calibration", {
                             "task": question,
-                            "component_type": "calibration"
+                            "component_type": "task"
                         }
                     )
                     comp_id = cal_data.get("component_id") or cal_data.get("id")
