@@ -194,159 +194,168 @@ class GiantQueenClient:
         print(f"  [BUZZING] Total subordinates: {len(self.subordinates)}")
 
     def _run_calibration(self):
-        """Generate a test, send to all subordinates, score them."""
+        """Thorough calibration: 3 big questions, 1s polling, averaged scores."""
         print_banner("BUZZING: Running Calibration Test", char="-")
+        NUM_ROUNDS = 3
+        CAL_POLL = 1  # 1-second polling during calibration for accuracy
 
-        print("  [BUZZING] Generating calibration test question...")
-        test_question = self.ai.ask(
-            prompt=("Generate a short test question that requires a detailed "
-                    "2-paragraph answer about any topic. Just output the "
-                    "question, nothing else."),
-            model=self.model_name,
-            temperature=0.7
-        ).strip()
-        print(f"  [BUZZING] FULL CALIBRATION QUESTION:")
-        print(f"  ---BEGIN---")
-        print(f"  {test_question}")
-        print(f"  ---END---")
+        # Generate 3 different big calibration questions
+        cal_questions = []
+        for i in range(NUM_ROUNDS):
+            print(f"  [BUZZING] Generating calibration question {i+1}/{NUM_ROUNDS}...")
+            q = self.ai.ask(
+                prompt=("Generate a question that requires a detailed, comprehensive "
+                        "answer of at least 4 paragraphs. Pick a rich topic like "
+                        "history, science, economics, or geopolitics. "
+                        "Just output the question, nothing else."),
+                model=self.model_name,
+                temperature=0.9
+            ).strip()
+            cal_questions.append(q)
+            print(f"  [BUZZING] Q{i+1}: {q[:120]}...")
 
-        # Sequential calibration — one subordinate at a time, with a dummy
-        # reset question before each real measurement. The dummy overwrites
-        # the LLM backend's prompt cache so the real question gets a full,
-        # fair evaluation. Without this, the second worker tested is ~2-3x
-        # faster due to cached prompt tokens. See BUZZING_BUGS.md.
         dummy_question = "Name three colors of the rainbow. Reply in three words only."
-        results = {}
+
+        # Collect times and answers: sub_id -> {times: [], answers: [], questions: [], name: str}
+        all_data = {}
         for sub in self.subordinates:
             sub_id = sub.get("member_id") or sub.get("id")
             sub_name = sub.get("username", f"member-{sub_id}")
-            try:
-                # Dummy reset: flush LLM prompt cache with unrelated question
-                print(f"  [BUZZING] Resetting cache for {sub_name}...")
+            all_data[sub_id] = {"times": [], "answers": [], "questions": [], "name": sub_name}
+
+        # Run each round: for each question, test each worker sequentially
+        for round_num, question in enumerate(cal_questions):
+            print_banner(f"BUZZING: Round {round_num+1}/{NUM_ROUNDS}", char="-")
+            for sub in self.subordinates:
+                sub_id = sub.get("member_id") or sub.get("id")
+                sub_name = all_data[sub_id]["name"]
                 try:
-                    dummy_data = self.kb._request(
+                    # Dummy reset: flush LLM prompt cache
+                    print(f"  [BUZZING] R{round_num+1} Resetting cache for {sub_name}...")
+                    try:
+                        dummy_data = self.kb._request(
+                            "POST", f"/api/member/{sub_id}/calibration", {
+                                "task": dummy_question,
+                                "component_type": "calibration"
+                            }
+                        )
+                        dummy_comp_id = dummy_data.get("component_id") or dummy_data.get("id")
+                        dummy_waited = 0
+                        while dummy_waited < 120:
+                            time.sleep(CAL_POLL)
+                            dummy_waited += CAL_POLL
+                            try:
+                                dummy_resp = self.kb._request(
+                                    "GET", f"/api/component/{dummy_comp_id}/status"
+                                )
+                                if dummy_resp.get("status") == "completed":
+                                    break
+                            except:
+                                pass
+                    except Exception as e:
+                        print(f"  [BUZZING] Cache reset failed for {sub_name}: {e}")
+
+                    # Real calibration measurement with 1s polling
+                    print(f"  [BUZZING] R{round_num+1} Sending calibration to {sub_name}...")
+                    start_time = time.time()
+                    cal_data = self.kb._request(
                         "POST", f"/api/member/{sub_id}/calibration", {
-                            "task": dummy_question,
+                            "task": question,
                             "component_type": "calibration"
                         }
                     )
-                    dummy_comp_id = dummy_data.get("component_id") or dummy_data.get("id")
-                    dummy_waited = 0
-                    while dummy_waited < 120:
-                        time.sleep(self.poll_interval)
-                        dummy_waited += self.poll_interval
+                    comp_id = cal_data.get("component_id") or cal_data.get("id")
+                    max_wait = 600
+                    waited = 0
+                    while waited < max_wait:
+                        time.sleep(CAL_POLL)
+                        waited += CAL_POLL
                         try:
-                            dummy_resp = self.kb._request(
-                                "GET", f"/api/component/{dummy_comp_id}/status"
+                            comp_resp = self.kb._request(
+                                "GET", f"/api/component/{comp_id}/status"
                             )
-                            if dummy_resp.get("status") == "completed":
-                                print(f"  [BUZZING] Cache reset for {sub_name}")
+                            if (comp_resp.get("status") == "completed"
+                                    and comp_resp.get("result")):
+                                elapsed = time.time() - start_time
+                                all_data[sub_id]["times"].append(elapsed)
+                                all_data[sub_id]["answers"].append(comp_resp["result"])
+                                all_data[sub_id]["questions"].append(question)
+                                print(f"  [BUZZING] R{round_num+1} {sub_name} "
+                                      f"completed in {elapsed:.1f}s")
+                                print(f"  [BUZZING] {sub_name} FULL ANSWER:")
+                                print(f"  ---BEGIN---")
+                                print(f"  {comp_resp['result'][:500]}...")
+                                print(f"  ---END---")
                                 break
                         except:
                             pass
+                    else:
+                        print(f"  [BUZZING] R{round_num+1} {sub_name} timed out")
                 except Exception as e:
-                    print(f"  [BUZZING] Cache reset failed for {sub_name}: {e}")
+                    print(f"  [BUZZING] R{round_num+1} Failed for {sub_name}: {e}")
 
-                # Real calibration measurement
-                print(f"  [BUZZING] Sending calibration to {sub_name}...")
-                start_time = time.time()
-                cal_data = self.kb._request(
-                    "POST", f"/api/member/{sub_id}/calibration", {
-                        "task": test_question,
-                        "component_type": "calibration"
-                    }
-                )
-                comp_id = cal_data.get("component_id") or cal_data.get("id")
-                max_wait = 600
-                waited = 0
-                while waited < max_wait:
-                    time.sleep(self.poll_interval)
-                    waited += self.poll_interval
-                    try:
-                        comp_resp = self.kb._request(
-                            "GET", f"/api/component/{comp_id}/status"
-                        )
-                        if (comp_resp.get("status") == "completed"
-                                and comp_resp.get("result")):
-                            elapsed = time.time() - start_time
-                            results[sub_id] = {
-                                "result": comp_resp["result"],
-                                "elapsed_time": elapsed,
-                                "name": sub_name
-                            }
-                            print(f"  [BUZZING] {sub_name} completed "
-                                  f"in {elapsed:.1f}s")
-                            print(f"  [BUZZING] {sub_name} FULL ANSWER:")
-                            print(f"  ---BEGIN---")
-                            print(f"  {comp_resp['result']}")
-                            print(f"  ---END---")
-                            break
-                    except:
-                        pass
-                    print(f"  [BUZZING] Waiting for {sub_name}... "
-                          f"({waited}s)", end="\r")
-                else:
-                    print(f"  [BUZZING] {sub_name} timed out after "
-                          f"{max_wait}s")
-            except Exception as e:
-                print(f"  [BUZZING] Failed to send calibration to "
-                      f"{sub_name}: {e}")
+        # Score each subordinate using averaged times and quality
+        print_banner("BUZZING: Scoring Subordinates (averaged)", char="-")
 
-        if not results:
-            print("  [BUZZING] No calibration results received. Skipping.")
+        # Calculate average times
+        avg_times = {}
+        for sub_id, data in all_data.items():
+            if data["times"]:
+                avg_times[sub_id] = sum(data["times"]) / len(data["times"])
+                print(f"  [BUZZING] {data['name']}: times={[round(t,1) for t in data['times']]}, "
+                      f"avg={avg_times[sub_id]:.1f}s")
+
+        if not avg_times:
+            print("  [BUZZING] No calibration results. Skipping.")
             return
 
-        print_banner("BUZZING: Scoring Subordinates", char="-")
+        fastest = min(avg_times.values())
 
-        times = {sid: r["elapsed_time"] for sid, r in results.items()}
-        fastest = min(times.values())
+        for sub_id, data in all_data.items():
+            if sub_id not in avg_times:
+                continue
 
-        for sub_id, r in results.items():
-            elapsed = r["elapsed_time"]
-            # Proportional speed: fastest gets 10, 2x slower gets 5, etc.
-            speed_score = 10.0 * (fastest / elapsed)
+            # Speed score from averaged time
+            speed_score = 10.0 * (fastest / avg_times[sub_id])
             speed_score = round(max(1.0, min(10.0, speed_score)), 1)
 
-            quality_prompt = (
-                f"Rate the following answer from 1 to 10 for completeness "
-                f"and accuracy. The question was: \"{test_question}\"\n\n"
-                f"Answer to rate:\n{r['result']}\n\n"
-                f"Reply with ONLY a single number from 1 to 10, nothing else."
-            )
-            print(f"  [BUZZING] Judging {r['name']}...")
-            print(f"  [BUZZING] QUALITY PROMPT SENT TO JUDGE:")
-            print(f"  ---BEGIN PROMPT---")
-            print(f"  {quality_prompt}")
-            print(f"  ---END PROMPT---")
-            quality_text = self.ai.ask(
-                prompt=quality_prompt,
-                model=self.model_name,
-                temperature=0.1
-            ).strip()
-            print(f"  [BUZZING] JUDGE RAW RESPONSE: \"{quality_text}\"")
-
-            try:
-                quality_score = float(
-                    ''.join(c for c in quality_text if c.isdigit() or c == '.')
+            # Quality: judge each answer, average the scores
+            q_scores = []
+            for answer, question in zip(data["answers"], data["questions"]):
+                quality_prompt = (
+                    f"Rate the following answer from 1 to 10 for completeness "
+                    f"and accuracy. The question was: \"{question}\"\n\n"
+                    f"Answer to rate:\n{answer}\n\n"
+                    f"Reply with ONLY a single number from 1 to 10, nothing else."
                 )
-                quality_score = max(1.0, min(10.0, quality_score))
-            except (ValueError, TypeError):
-                quality_score = 5.0
+                print(f"  [BUZZING] Judging {data['name']}...")
+                quality_text = self.ai.ask(
+                    prompt=quality_prompt,
+                    model=self.model_name,
+                    temperature=0.1
+                ).strip()
+                print(f"  [BUZZING] JUDGE RAW RESPONSE: \"{quality_text}\"")
+                try:
+                    qs = float(''.join(c for c in quality_text if c.isdigit() or c == '.'))
+                    q_scores.append(max(1.0, min(10.0, qs)))
+                except (ValueError, TypeError):
+                    q_scores.append(5.0)
 
-            quality_score = round(quality_score, 1)
+            quality_score = round(sum(q_scores) / len(q_scores), 1) if q_scores else 5.0
             buzzing = round(speed_score * quality_score, 1)
 
-            print(f"  [BUZZING] {r['name']}: speed={speed_score}, "
-                  f"quality={quality_score}, buzzing={buzzing}")
+            print(f"  [BUZZING] {data['name']}: speed={speed_score}, "
+                  f"quality={quality_score} (from {[round(q,1) for q in q_scores]}), "
+                  f"buzzing={buzzing}")
 
             try:
                 self.kb.report_buzzing(
                     sub_id, speed_score, quality_score, self.member_id
                 )
-                print(f"  [BUZZING] Reported buzzing for {r['name']}")
+                print(f"  [BUZZING] Reported buzzing for {data['name']}")
             except Exception as e:
                 print(f"  [BUZZING] Failed to report buzzing for "
-                      f"{r['name']}: {e}")
+                      f"{data['name']}: {e}")
 
         try:
             self.kb.recalculate_member(self.member_id)
