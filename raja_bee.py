@@ -221,6 +221,39 @@ class RajaBee:
         ).strip()
         print(f"  [BUZZING] Calibration question: {test_question[:100]}...")
 
+        # Warmup round: send a tiny task to each subordinate so Ollama loads
+        # the model into memory. Without this, the first worker tested is
+        # always slower (cold model load) and gets unfairly penalized.
+        print("  [BUZZING] Warmup round — loading models on all subordinates...")
+        for sub in self.subordinates:
+            sub_id = sub.get("member_id") or sub.get("id")
+            sub_name = sub.get("username", f"member-{sub_id}")
+            try:
+                cal_data = self.kb._request(
+                    "POST", f"/api/member/{sub_id}/calibration", {
+                        "task": "Warmup: reply with one word.",
+                        "component_type": "calibration"
+                    }
+                )
+                comp_id = cal_data.get("component_id") or cal_data.get("id")
+                # Wait for warmup to complete
+                waited = 0
+                while waited < 120:
+                    time.sleep(self.poll_interval)
+                    waited += self.poll_interval
+                    try:
+                        resp = self.kb._request(
+                            "GET", f"/api/component/{comp_id}/status"
+                        )
+                        if resp.get("status") == "completed":
+                            print(f"  [BUZZING] {sub_name} warmed up")
+                            break
+                    except:
+                        pass
+            except Exception as e:
+                print(f"  [BUZZING] Warmup failed for {sub_name}: {e}")
+        print("  [BUZZING] Warmup complete. Starting real calibration...")
+
         # Step 2: Send calibration SEQUENTIALLY — one at a time so each
         # subordinate gets exclusive Ollama access for fair timing measurement
         results = {}
