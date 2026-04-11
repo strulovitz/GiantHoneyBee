@@ -305,18 +305,21 @@ class RajaBee:
                       f"round2={r2_times[sub_id]:.1f}s, avg={avg_time:.1f}s")
                 results[sub_id] = {
                     "result": r2_results[sub_id]["result"],
+                    "question": test_question_2,
                     "elapsed_time": avg_time,
                     "name": sub_name
                 }
             elif sub_id in r1_times:
                 results[sub_id] = {
                     "result": r1_results[sub_id]["result"],
+                    "question": test_question,
                     "elapsed_time": r1_times[sub_id],
                     "name": sub_name
                 }
             elif sub_id in r2_times:
                 results[sub_id] = {
                     "result": r2_results[sub_id]["result"],
+                    "question": test_question_2,
                     "elapsed_time": r2_times[sub_id],
                     "name": sub_name
                 }
@@ -342,7 +345,7 @@ class RajaBee:
             # Judge quality using own LLM
             quality_prompt = (
                 f"Rate the following answer from 1 to 10 for completeness "
-                f"and accuracy. The question was: \"{test_question}\"\n\n"
+                f"and accuracy. The question was: \"{r['question']}\"\n\n"
                 f"Answer to rate:\n{r['result']}\n\n"
                 f"Reply with ONLY a single number from 1 to 10, nothing else."
             )
