@@ -108,9 +108,9 @@ In each file, before each real calibration task, send a dummy question through t
 
 ---
 
-## Bug 4: Quality Score Noise From Small LLM Judge — NEW (2026-04-11)
+## Bug 4: Quality Score Difference — Worker Prompt Bug (2026-04-11)
 
-**Status: NOT FIXED**
+**Status: FIXED**
 
 ### Round 5 (dummy cache reset, no verbose logging, 2026-04-11)
 
@@ -159,33 +159,30 @@ The quality difference is REAL for these specific outputs, but it does NOT refle
 
 ### Root cause of Bug 4
 
-It's NOT that the judge is bad. It's that **identical workers produce different outputs due to LLM randomness**, and the judge correctly identifies real quality differences between those random outputs. The fix must address the randomness in the inputs to the judge, not the judge itself.
+**The worker prompt said "You are a worker bee."** The LLM literally role-played as an insect.
 
-### The impact
+Answers included:
+- "As a worker bee, I must admit that my expertise lies in apiculture and pollination..."
+- "I'm just a worker bee... I don't have personal experiences with ancient Pompeii..."
+- "my expertise lies in collecting nectar and pollen"
 
-With equal speed scores (both 10.0), the fractions are determined entirely by quality:
-- alpha buzzing: 10.0 * 2.0 = 20.0
-- bravo buzzing: 10.0 * 6.0 = 60.0
-- Fractions: 20/80 = 0.250 vs 60/80 = 0.750
+The LLM randomly decided whether to lean into the bee roleplay (apologetic, weaker answer) or push past it (confident, good answer). This was NOT caused by:
+- Judge contamination between calls
+- LLM prompt caching affecting quality
+- Small model being a bad judge
 
-A random quality score difference of 4 points created a 3:1 work split for identical workers.
+The judge was CORRECT — an answer that starts with "I must admit my expertise lies in nectar and pollen" IS worse than one that directly answers the question.
 
-### Possible fixes
+### How we found it
 
-1. **Average multiple quality judgments:** Have the boss LLM rate each answer 3 times, take the average. Reduces noise but 3x the LLM calls.
+1. Nir suggested the quality difference might be caused by the judge contaminating the second worker (seeing the same question in the judge prompt poisons the next worker's answer). This led to building a proper test script.
+2. The test script used the actual worker prompt from the code, and revealed that ALL answers (first, second, baseline) randomly contained apologetic "I'm a bee" language.
+3. Root cause: the worker prompt template, not the calibration sequence.
 
-2. **Relative ranking instead of absolute scoring:** Instead of "rate this answer 1-10", ask "which of these two answers is better?" Pairwise comparison is easier for small LLMs than absolute scoring. But doesn't scale well to many workers.
+### The fix
 
-3. **Skip quality scoring for same-model workers:** If the boss and workers all run the same model, quality differences are noise. Use speed-only scoring. Only use quality when the boss runs a genuinely better model than the workers.
+Removed "You are a worker bee" roleplay from the worker prompt. New prompt just asks the question directly with context. Tested: 3 runs, zero bee nonsense, zero apologies, consistent quality.
 
-4. **Clamp quality range:** If all quality scores are within N points of each other (e.g., all between 4-8), treat them as equal. Only let quality affect fractions when there's a large gap (e.g., one answer is genuinely garbage scoring 1 while others score 7+).
+### Files fixed
 
-5. **Use quality as a pass/fail gate:** Quality below threshold (e.g., 3) = worker is broken/misconfigured, exclude them. Quality above threshold = all workers are "good enough", use speed-only fractions.
-
-### Decision needed from Nir
-
-The speed measurement is now perfect. The remaining unfairness is entirely from quality score noise. What approach should we take?
-
-### Files to fix
-
-Same 3 files: `dwarf_queen_client.py`, `raja_bee.py`, `giant_queen_client.py` — the scoring section of `_run_calibration()`.
+`GiantHoneyBee/worker_client.py` — `_process_subtask()` method, the prompt template.
