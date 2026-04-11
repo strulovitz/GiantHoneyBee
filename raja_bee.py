@@ -494,22 +494,24 @@ class RajaBee:
                 )
             fraction_instructions = "\n".join(fraction_lines)
 
-            prompt = f"""Split this into exactly {num_components} independent components.
-Each covers a different part. Together they fully cover the task.
+            prompt = f"""Split this task into exactly {num_components} parts. Each part is one plain text sentence describing what to research or answer. No nested objects, no pros/cons, no descriptions — just {num_components} simple sentences.
 
 Size proportionally:
 {fraction_instructions}
 
 Task: {task}
 
-Return ONLY a JSON array of exactly {num_components} strings."""
+Example format: ["Research topic A including X and Y", "Analyze topic B with focus on Z"]
+
+Return ONLY a JSON array of exactly {num_components} strings:"""
         else:
-            prompt = f"""Split this into 2-4 independent components.
-Each covers a different part. Together they fully cover the task.
+            prompt = f"""Split this task into 2-4 parts. Each part is one plain text sentence describing what to research or answer. No nested objects, no pros/cons, no descriptions — just 2-4 simple sentences.
 
 Task: {task}
 
-Return ONLY a JSON array of strings."""
+Example format: ["Research topic A including X and Y", "Analyze topic B with focus on Z"]
+
+Return ONLY a JSON array of strings:"""
 
         components = self.ai.ask_for_json_list(
             prompt=prompt,
@@ -517,8 +519,13 @@ Return ONLY a JSON array of strings."""
             temperature=0.3
         )
 
+        max_expected = num_components if num_components else 4
         if not components or len(components) < 2:
-            # Fallback: treat the whole task as one component
+            components = [task]
+        elif len(components) > max_expected * 2:
+            # LLM returned way too many items (bad JSON parsing) — retry with fallback
+            print(f"  [WARNING] Split returned {len(components)} items "
+                  f"(expected {max_expected}). Falling back to single component.")
             components = [task]
 
         return components

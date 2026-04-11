@@ -517,7 +517,7 @@ class GiantQueenClient:
                 )
             fraction_instructions = "\n".join(fraction_lines)
 
-            prompt = f"""Split this into exactly {num_subs} independent sub-components.
+            prompt = f"""Split this into exactly {num_subs} parts. Each part is one plain text sentence describing what to research or answer. No nested objects, no pros/cons — just {num_subs} simple sentences.
 
 Original question: "{original_task}"
 Component to split: {task}
@@ -525,14 +525,18 @@ Component to split: {task}
 Size proportionally:
 {fraction_instructions}
 
-Return ONLY a JSON array of exactly {num_subs} strings."""
+Example format: ["Research aspect A", "Analyze aspect B"]
+
+Return ONLY a JSON array of exactly {num_subs} strings:"""
         else:
-            prompt = f"""Split this into 2-3 independent sub-components.
+            prompt = f"""Split this into 2-3 parts. Each part is one plain text sentence describing what to research or answer. No nested objects, no pros/cons — just 2-3 simple sentences.
 
 Original question: "{original_task}"
 Component to split: {task}
 
-Return ONLY a JSON array of strings. Example: ["sub-component 1", "sub-component 2"]"""
+Example format: ["Research aspect A", "Analyze aspect B"]
+
+Return ONLY a JSON array of strings:"""
 
         result = self.ai.ask_for_json_list(
             prompt=prompt,
@@ -540,7 +544,12 @@ Return ONLY a JSON array of strings. Example: ["sub-component 1", "sub-component
             temperature=0.3
         )
 
+        max_expected = num_subs if num_subs else 3
         if not result or len(result) < 2:
+            result = [task]
+        elif len(result) > max_expected * 2:
+            print(f"  [WARNING] Split returned {len(result)} items "
+                  f"(expected {max_expected}). Falling back to single component.")
             result = [task]
 
         return result
