@@ -16,7 +16,7 @@ class KillerBeeClient:
     """Client for the KillerBee website API."""
 
     def __init__(self, server_url: str, username: str, password: str,
-                 max_retries: int = 3, retry_delay: float = 2.0):
+                 max_retries: int = 10, retry_delay: float = 2.0):
         self.server_url = server_url.rstrip('/')
         self.username = username
         self.password = password
