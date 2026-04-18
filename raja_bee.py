@@ -278,7 +278,7 @@ class RajaBee:
                         }
                     )
                     comp_id = cal_data.get("component_id") or cal_data.get("id")
-                    max_wait = 600
+                    max_wait = 60
                     waited = 0
                     while waited < max_wait:
                         time.sleep(CAL_POLL)
@@ -487,7 +487,7 @@ class RajaBee:
             fraction_lines = []
             for i, f in enumerate(self.fractions):
                 name = f.get("username", f.get("name", f"Subordinate {i+1}"))
-                frac = f.get("fraction", round(1.0 / num_components, 2))
+                frac = f.get("fraction") or round(1.0 / num_components, 2)
                 fraction_lines.append(
                     f"Component {i+1} should cover about {frac:.2f} "
                     f"of the total work (for {name})"

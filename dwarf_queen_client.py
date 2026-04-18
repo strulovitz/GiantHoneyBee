@@ -265,7 +265,7 @@ class DwarfQueenClient:
                         }
                     )
                     comp_id = cal_data.get("component_id") or cal_data.get("id")
-                    max_wait = 600
+                    max_wait = 60
                     waited = 0
                     while waited < max_wait:
                         time.sleep(CAL_POLL)
