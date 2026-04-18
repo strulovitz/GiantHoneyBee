@@ -198,22 +198,32 @@ def main():
         description="Worker Bee -- Does the actual AI work. "
                     "Connects to KillerBee website API."
     )
-    parser.add_argument('--server', type=str, required=True,
-                        help='KillerBee server URL')
-    parser.add_argument('--swarm-id', type=int, required=True,
-                        help='Swarm ID to join')
-    parser.add_argument('--username', type=str, required=True,
-                        help='Username for KillerBee login')
-    parser.add_argument('--password', type=str, required=True,
-                        help='Password for KillerBee login')
-    parser.add_argument('--model', type=str, default='qwen2.5:1.5b',
-                        help='Ollama model name (default: qwen2.5:1.5b)')
+    parser.add_argument('--server', type=str,
+                        default=os.environ.get('KILLERBEE_URL'),
+                        help='KillerBee server URL (env: KILLERBEE_URL)')
+    parser.add_argument('--swarm-id', type=int,
+                        default=int(os.environ.get('KILLERBEE_SWARM_ID', '1')),
+                        help='Swarm ID (env: KILLERBEE_SWARM_ID, default 1)')
+    parser.add_argument('--username', type=str,
+                        default=os.environ.get('KILLERBEE_USERNAME'),
+                        help='Username (env: KILLERBEE_USERNAME)')
+    parser.add_argument('--password', type=str,
+                        default=os.environ.get('KILLERBEE_PASSWORD'),
+                        help='Password (env: KILLERBEE_PASSWORD)')
+    parser.add_argument('--model', type=str,
+                        default=os.environ.get('KILLERBEE_MODEL', 'qwen3:1.7b'),
+                        help='Ollama model (env: KILLERBEE_MODEL, tier default qwen3:1.7b)')
     parser.add_argument('--ollama-url', type=str,
-                        default='http://localhost:11434',
-                        help='Ollama API URL')
+                        default=os.environ.get('OLLAMA_URL', 'http://localhost:11434'),
+                        help='Ollama API URL (env: OLLAMA_URL)')
     parser.add_argument('--poll-interval', type=int, default=5,
                         help='Seconds between polls (default: 5)')
     args = parser.parse_args()
+
+    missing = [k for k in ('server', 'username', 'password') if getattr(args, k) is None]
+    if missing:
+        parser.error("Missing " + ", ".join('--' + m for m in missing)
+                     + " (or env KILLERBEE_URL / KILLERBEE_USERNAME / KILLERBEE_PASSWORD)")
 
     worker = WorkerClient(
         server_url=args.server,
