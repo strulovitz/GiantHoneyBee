@@ -36,9 +36,10 @@ from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
 from photo_tier import process_photo_piece
 from audio_tier import process_audio_piece
+from video_tier import process_video_piece
 from tier_timeouts import TIMEOUTS, CIRCUIT_BREAKER
 
-# Whisper model path for DwarfQueen (plan Section 6b)
+# Whisper model path for DwarfQueen (plan Section 6b / 6c)
 _DQ_WHISPER_MODEL = str(
     __import__('pathlib').Path.home()
     / "multimedia-feasibility" / "whisper.cpp" / "models"
@@ -423,6 +424,7 @@ class DwarfQueenClient:
                         status = component.get("status", "")
                         if status in ("pending", "assigned", ""):
                             piece_path = component.get("piece_path")
+                            audio_piece_path = component.get("audio_piece_path")
                             media_type = component.get("media_type")
                             print(f"\n  [COMPONENT {comp_id}] Assigned to me: "
                                   f"{task[:80]}...")
@@ -430,6 +432,7 @@ class DwarfQueenClient:
                                 comp_id, task, original_task,
                                 piece_path=piece_path, media_type=media_type,
                                 job_id=component.get("job_id"),
+                                audio_piece_path=audio_piece_path,
                             )
                 else:
                     # Check for unclaimed level-1 components we can claim.
@@ -444,6 +447,7 @@ class DwarfQueenClient:
                             task = component.get("task", "")
                             original_task = component.get("original_task", task)
                             piece_path = component.get("piece_path")
+                            audio_piece_path = component.get("audio_piece_path")
                             media_type = component.get("media_type")
                             try:
                                 self.kb.claim_component(comp_id, self.member_id)
@@ -453,6 +457,7 @@ class DwarfQueenClient:
                                     comp_id, task, original_task,
                                     piece_path=piece_path, media_type=media_type,
                                     job_id=component.get("job_id"),
+                                    audio_piece_path=audio_piece_path,
                                 )
                                 break  # One at a time
                             except Exception as e:
@@ -469,8 +474,9 @@ class DwarfQueenClient:
 
     def _process_component(self, component_id: int, task: str,
                            original_task: str = "", piece_path: str = None,
-                           media_type: str = None, job_id: int = None):
-        """Process a component: photo branch or existing text branch."""
+                           media_type: str = None, job_id: int = None,
+                           audio_piece_path: str = None):
+        """Process a component: photo / audio / video branch or existing text branch."""
         start_time = time.time()
         original_task = original_task or task
         _cb_ceiling = CIRCUIT_BREAKER["dwarf_queen"]  # 360s wall-clock ceiling
@@ -531,6 +537,37 @@ class DwarfQueenClient:
             try:
                 self.kb.post_component_result(component_id, paragraph, processing_time)
                 print(f"  [COMPONENT {component_id}] AUDIO COMPLETE in "
+                      f"{processing_time:.1f}s ({len(paragraph)} chars)")
+            except Exception as e:
+                print(f"  [COMPONENT {component_id}] [ERROR] Post result: {e}")
+            return
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── Video branch ───────────────────────────────────────────────────────
+        if media_type == 'video' and piece_path:
+            print(f"  [COMPONENT {component_id}] VIDEO component — running video pipeline")
+            print(f"  [COMPONENT {component_id}] video_url={piece_path}, "
+                  f"audio_url={audio_piece_path}")
+            try:
+                paragraph = process_video_piece(
+                    tier='dwarf_queen',
+                    component_id=component_id,
+                    job_id=job_id,
+                    video_url=piece_path,
+                    audio_url=audio_piece_path,
+                    vision_model='qwen3-vl:8b',
+                    whisper_model_path=_DQ_WHISPER_MODEL,
+                    text_model='phi4-mini:3.8b',
+                    client=self.kb,
+                    ollama_url=self.ollama_url,
+                )
+            except Exception as e:
+                print(f"  [COMPONENT {component_id}] [ERROR] Video pipeline: {e}")
+                return
+            processing_time = time.time() - start_time
+            try:
+                self.kb.post_component_result(component_id, paragraph, processing_time)
+                print(f"  [COMPONENT {component_id}] VIDEO COMPLETE in "
                       f"{processing_time:.1f}s ({len(paragraph)} chars)")
             except Exception as e:
                 print(f"  [COMPONENT {component_id}] [ERROR] Post result: {e}")

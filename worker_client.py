@@ -34,9 +34,10 @@ from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
 from photo_tier import process_photo_piece
 from audio_tier import process_audio_piece
+from video_tier import process_video_piece
 from tier_timeouts import TIMEOUTS, CIRCUIT_BREAKER
 
-# Whisper model path for Worker (plan Section 6b — same as DwarfQueen: tiny)
+# Whisper model path for Worker (plan Section 6b / 6c — tiny)
 _WORKER_WHISPER_MODEL = str(
     __import__('pathlib').Path.home()
     / "multimedia-feasibility" / "whisper.cpp" / "models"
@@ -125,6 +126,7 @@ class WorkerClient:
                         original_task = task_item.get("original_task", task)
                         comp_type = task_item.get("component_type", "subtask")
                         piece_path = task_item.get("piece_path")
+                        audio_piece_path = task_item.get("audio_piece_path")
                         media_type = task_item.get("media_type")
                         print(f"\n  [TASK {t_id}] Assigned to me ({comp_type}):")
                         print(f"  FULL QUESTION:")
@@ -134,7 +136,8 @@ class WorkerClient:
                         self._process_subtask(t_id, task, original_task,
                                               piece_path=piece_path,
                                               media_type=media_type,
-                                              job_id=task_item.get("job_id"))
+                                              job_id=task_item.get("job_id"),
+                                              audio_piece_path=audio_piece_path)
                         found_work = True
                         break  # One at a time
 
@@ -147,6 +150,7 @@ class WorkerClient:
                             task = subtask.get("task", "")
                             original_task = subtask.get("original_task", task)
                             piece_path = subtask.get("piece_path")
+                            audio_piece_path = subtask.get("audio_piece_path")
                             media_type = subtask.get("media_type")
 
                             try:
@@ -156,7 +160,8 @@ class WorkerClient:
                                 self._process_subtask(st_id, task, original_task,
                                                       piece_path=piece_path,
                                                       media_type=media_type,
-                                                      job_id=subtask.get("job_id"))
+                                                      job_id=subtask.get("job_id"),
+                                                      audio_piece_path=audio_piece_path)
                                 found_work = True
                                 break  # One at a time
                             except Exception as e:
@@ -174,8 +179,9 @@ class WorkerClient:
 
     def _process_subtask(self, subtask_id: int, task: str,
                          original_task: str = "", piece_path: str = None,
-                         media_type: str = None, job_id: int = None):
-        """Process a single subtask: photo tile branch or text branch."""
+                         media_type: str = None, job_id: int = None,
+                         audio_piece_path: str = None):
+        """Process a single subtask: photo / audio / video clip branch or text branch."""
         start_time = time.time()
         original_task = original_task or task
         _cb_ceiling = CIRCUIT_BREAKER["worker"]  # 360s wall-clock ceiling
@@ -234,6 +240,41 @@ class WorkerClient:
                 self.kb.post_component_result(subtask_id, transcription, processing_time)
                 self.tasks_completed += 1
                 print(f"  [SUBTASK {subtask_id}] AUDIO SLICE COMPLETE in "
+                      f"{processing_time:.1f}s "
+                      f"(total completed: {self.tasks_completed})")
+            except Exception as e:
+                print(f"  [SUBTASK {subtask_id}] [ERROR] Failed to post result: {e}")
+            return
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── Video branch ───────────────────────────────────────────────────────
+        if media_type == 'video' and piece_path:
+            print(f"  [SUBTASK {subtask_id}] VIDEO clip — running qwen3-vl + whisper-tiny "
+                  f"(Slippery Point 7: clip-not-frame)")
+            print(f"  [SUBTASK {subtask_id}] video_url={piece_path}, "
+                  f"audio_url={audio_piece_path}")
+            try:
+                clip_result = process_video_piece(
+                    tier='worker',
+                    component_id=subtask_id,
+                    job_id=job_id,
+                    video_url=piece_path,
+                    audio_url=audio_piece_path,
+                    vision_model='qwen3-vl:8b',
+                    whisper_model_path=_WORKER_WHISPER_MODEL,
+                    text_model=None,     # Worker is leaf — combined visual+audio IS the result
+                    client=self.kb,
+                    ollama_url=self.ollama_url,
+                )
+            except Exception as e:
+                print(f"  [SUBTASK {subtask_id}] [ERROR] Video clip: {e}")
+                return
+            processing_time = time.time() - start_time
+            print(f"  [SUBTASK {subtask_id}] VIDEO CLIP RESULT: {clip_result[:120]}...")
+            try:
+                self.kb.post_component_result(subtask_id, clip_result, processing_time)
+                self.tasks_completed += 1
+                print(f"  [SUBTASK {subtask_id}] VIDEO CLIP COMPLETE in "
                       f"{processing_time:.1f}s "
                       f"(total completed: {self.tasks_completed})")
             except Exception as e:

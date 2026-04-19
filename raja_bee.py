@@ -33,9 +33,10 @@ from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
 from photo_tier import process_photo_piece
 from audio_tier import process_audio_piece
+from video_tier import process_video_piece
 from tier_timeouts import TIMEOUTS, CIRCUIT_BREAKER
 
-# Whisper model paths per tier (plan Section 6b)
+# Whisper model paths per tier (plan Section 6b / 6c)
 _RAJA_WHISPER_MODEL = str(
     __import__('pathlib').Path.home()
     / "multimedia-feasibility" / "whisper.cpp" / "models"
@@ -518,6 +519,42 @@ class RajaBee:
                       f"in {total_time:.1f}s ({len(honey)} chars)")
             except Exception as e:
                 print(f"  [JOB {job_id}] [ERROR] Failed to post audio result: {e}")
+            return
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── Video branch ───────────────────────────────────────────────────────
+        if media_type == 'video' and media_url:
+            print(f"  [JOB {job_id}] VIDEO job detected — running video pipeline")
+            print(f"  [JOB {job_id}] media_url: {media_url}")
+            # Derive the audio URL: the submit route saves original_audio.mp3 next
+            # to original.mp4 in the same folder.
+            import os as _os
+            video_stem = _os.path.splitext(media_url)[0]  # strip extension
+            audio_url = video_stem + "_audio.mp3"         # e.g. video/swarmjob_N/original_audio.mp3
+            print(f"  [JOB {job_id}] Derived audio_url: {audio_url}")
+            try:
+                honey = process_video_piece(
+                    tier='raja',
+                    component_id=None,
+                    job_id=job_id,
+                    video_url=media_url,
+                    audio_url=audio_url,
+                    vision_model='qwen3-vl:8b',
+                    whisper_model_path=_RAJA_WHISPER_MODEL,
+                    text_model='qwen3:14b',
+                    client=self.kb,
+                    ollama_url=self.ollama_url,
+                )
+            except Exception as e:
+                print(f"  [JOB {job_id}] [ERROR] Video pipeline failed: {e}")
+                return
+            total_time = time.time() - total_start
+            try:
+                self.kb.post_job_result(job_id, honey, total_time)
+                print(f"  [JOB {job_id}] VIDEO COMPLETE! Royal Honey delivered "
+                      f"in {total_time:.1f}s ({len(honey)} chars)")
+            except Exception as e:
+                print(f"  [JOB {job_id}] [ERROR] Failed to post video result: {e}")
             return
         # ──────────────────────────────────────────────────────────────────────
 
