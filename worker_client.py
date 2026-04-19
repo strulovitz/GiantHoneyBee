@@ -33,7 +33,15 @@ sys.path.insert(0, HONEYCOMB_PATH)
 from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
 from photo_tier import process_photo_piece
+from audio_tier import process_audio_piece
 from tier_timeouts import TIMEOUTS, CIRCUIT_BREAKER
+
+# Whisper model path for Worker (plan Section 6b — same as DwarfQueen: tiny)
+_WORKER_WHISPER_MODEL = str(
+    __import__('pathlib').Path.home()
+    / "multimedia-feasibility" / "whisper.cpp" / "models"
+    / "ggml-tiny.bin"
+)
 
 
 def print_banner(text: str, char: str = "="):
@@ -196,6 +204,36 @@ class WorkerClient:
                 self.kb.post_component_result(subtask_id, gestalt, processing_time)
                 self.tasks_completed += 1
                 print(f"  [SUBTASK {subtask_id}] PHOTO TILE COMPLETE in "
+                      f"{processing_time:.1f}s "
+                      f"(total completed: {self.tasks_completed})")
+            except Exception as e:
+                print(f"  [SUBTASK {subtask_id}] [ERROR] Failed to post result: {e}")
+            return
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── Audio branch ───────────────────────────────────────────────────────
+        if media_type == 'audio' and piece_path:
+            print(f"  [SUBTASK {subtask_id}] AUDIO slice — running whisper-tiny")
+            try:
+                transcription = process_audio_piece(
+                    tier='worker',
+                    component_id=subtask_id,
+                    job_id=job_id,
+                    piece_url=piece_path,
+                    whisper_model_path=_WORKER_WHISPER_MODEL,
+                    text_model=None,     # Worker is leaf — STT output IS the result
+                    client=self.kb,
+                    ollama_url=self.ollama_url,
+                )
+            except Exception as e:
+                print(f"  [SUBTASK {subtask_id}] [ERROR] Audio whisper: {e}")
+                return
+            processing_time = time.time() - start_time
+            print(f"  [SUBTASK {subtask_id}] AUDIO SLICE RESULT: {transcription[:120]}...")
+            try:
+                self.kb.post_component_result(subtask_id, transcription, processing_time)
+                self.tasks_completed += 1
+                print(f"  [SUBTASK {subtask_id}] AUDIO SLICE COMPLETE in "
                       f"{processing_time:.1f}s "
                       f"(total completed: {self.tasks_completed})")
             except Exception as e:

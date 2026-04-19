@@ -32,7 +32,15 @@ sys.path.insert(0, HONEYCOMB_PATH)
 from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
 from photo_tier import process_photo_piece
+from audio_tier import process_audio_piece
 from tier_timeouts import TIMEOUTS, CIRCUIT_BREAKER
+
+# Whisper model paths per tier (plan Section 6b)
+_RAJA_WHISPER_MODEL = str(
+    __import__('pathlib').Path.home()
+    / "multimedia-feasibility" / "whisper.cpp" / "models"
+    / "ggml-large-v3-turbo-q5_0.bin"
+)
 
 
 def print_banner(text: str, char: str = "="):
@@ -472,6 +480,34 @@ class RajaBee:
                       f"in {total_time:.1f}s ({len(honey)} chars)")
             except Exception as e:
                 print(f"  [JOB {job_id}] [ERROR] Failed to post photo result: {e}")
+            return
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── Audio branch ───────────────────────────────────────────────────────
+        if media_type == 'audio' and media_url:
+            print(f"  [JOB {job_id}] AUDIO job detected — running audio pipeline")
+            print(f"  [JOB {job_id}] media_url: {media_url}")
+            try:
+                honey = process_audio_piece(
+                    tier='raja',
+                    component_id=None,
+                    job_id=job_id,
+                    piece_url=media_url,
+                    whisper_model_path=_RAJA_WHISPER_MODEL,
+                    text_model='qwen3:14b',
+                    client=self.kb,
+                    ollama_url=self.ollama_url,
+                )
+            except Exception as e:
+                print(f"  [JOB {job_id}] [ERROR] Audio pipeline failed: {e}")
+                return
+            total_time = time.time() - total_start
+            try:
+                self.kb.post_job_result(job_id, honey, total_time)
+                print(f"  [JOB {job_id}] AUDIO COMPLETE! Royal Honey delivered "
+                      f"in {total_time:.1f}s ({len(honey)} chars)")
+            except Exception as e:
+                print(f"  [JOB {job_id}] [ERROR] Failed to post audio result: {e}")
             return
         # ──────────────────────────────────────────────────────────────────────
 

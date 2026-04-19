@@ -35,7 +35,15 @@ sys.path.insert(0, HONEYCOMB_PATH)
 from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
 from photo_tier import process_photo_piece
+from audio_tier import process_audio_piece
 from tier_timeouts import TIMEOUTS, CIRCUIT_BREAKER
+
+# Whisper model path for DwarfQueen (plan Section 6b)
+_DQ_WHISPER_MODEL = str(
+    __import__('pathlib').Path.home()
+    / "multimedia-feasibility" / "whisper.cpp" / "models"
+    / "ggml-tiny.bin"
+)
 
 
 def print_banner(text: str, char: str = "="):
@@ -496,6 +504,33 @@ class DwarfQueenClient:
             try:
                 self.kb.post_component_result(component_id, paragraph, processing_time)
                 print(f"  [COMPONENT {component_id}] PHOTO COMPLETE in "
+                      f"{processing_time:.1f}s ({len(paragraph)} chars)")
+            except Exception as e:
+                print(f"  [COMPONENT {component_id}] [ERROR] Post result: {e}")
+            return
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── Audio branch ───────────────────────────────────────────────────────
+        if media_type == 'audio' and piece_path:
+            print(f"  [COMPONENT {component_id}] AUDIO component — running audio pipeline")
+            try:
+                paragraph = process_audio_piece(
+                    tier='dwarf_queen',
+                    component_id=component_id,
+                    job_id=job_id,
+                    piece_url=piece_path,
+                    whisper_model_path=_DQ_WHISPER_MODEL,
+                    text_model='phi4-mini:3.8b',
+                    client=self.kb,
+                    ollama_url=self.ollama_url,
+                )
+            except Exception as e:
+                print(f"  [COMPONENT {component_id}] [ERROR] Audio pipeline: {e}")
+                return
+            processing_time = time.time() - start_time
+            try:
+                self.kb.post_component_result(component_id, paragraph, processing_time)
+                print(f"  [COMPONENT {component_id}] AUDIO COMPLETE in "
                       f"{processing_time:.1f}s ({len(paragraph)} chars)")
             except Exception as e:
                 print(f"  [COMPONENT {component_id}] [ERROR] Post result: {e}")
