@@ -34,6 +34,7 @@ sys.path.insert(0, HONEYCOMB_PATH)
 
 from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
+from photo_tier import process_photo_piece
 
 
 def print_banner(text: str, char: str = "="):
@@ -70,6 +71,7 @@ class DwarfQueenClient:
         self.fractions = []      # list of {member_id, name, fraction} dicts
         self._last_known_capacities = {}  # member_id -> capacity
 
+        self.ollama_url = ollama_url
         self.kb = KillerBeeClient(server_url, username, password)
         self.ai = OllamaClient(base_url=ollama_url)
 
@@ -409,9 +411,15 @@ class DwarfQueenClient:
                         original_task = component.get("original_task", task)
                         status = component.get("status", "")
                         if status in ("pending", "assigned", ""):
+                            piece_path = component.get("piece_path")
+                            media_type = component.get("media_type")
                             print(f"\n  [COMPONENT {comp_id}] Assigned to me: "
                                   f"{task[:80]}...")
-                            self._process_component(comp_id, task, original_task)
+                            self._process_component(
+                                comp_id, task, original_task,
+                                piece_path=piece_path, media_type=media_type,
+                                job_id=component.get("job_id"),
+                            )
                 else:
                     # Check for unclaimed components we can claim
                     available = self.kb.get_available_components(self.swarm_id)
@@ -420,11 +428,17 @@ class DwarfQueenClient:
                             comp_id = component.get("id")
                             task = component.get("task", "")
                             original_task = component.get("original_task", task)
+                            piece_path = component.get("piece_path")
+                            media_type = component.get("media_type")
                             try:
                                 self.kb.claim_component(comp_id, self.member_id)
                                 print(f"\n  [COMPONENT {comp_id}] Claimed: "
                                       f"{task[:80]}...")
-                                self._process_component(comp_id, task, original_task)
+                                self._process_component(
+                                    comp_id, task, original_task,
+                                    piece_path=piece_path, media_type=media_type,
+                                    job_id=component.get("job_id"),
+                                )
                                 break  # One at a time
                             except Exception as e:
                                 print(f"  [COMPONENT {comp_id}] Could not claim: {e}")
@@ -438,8 +452,10 @@ class DwarfQueenClient:
 
             time.sleep(self.poll_interval)
 
-    def _process_component(self, component_id: int, task: str, original_task: str = ""):
-        """Process a component: split into subtasks for Workers."""
+    def _process_component(self, component_id: int, task: str,
+                           original_task: str = "", piece_path: str = None,
+                           media_type: str = None, job_id: int = None):
+        """Process a component: photo branch or existing text branch."""
         start_time = time.time()
         original_task = original_task or task
 
@@ -449,6 +465,34 @@ class DwarfQueenClient:
             print(f"  [COMPONENT {component_id}] Claimed")
         except Exception as e:
             print(f"  [COMPONENT {component_id}] [WARN] Claim: {e}")
+
+        # ── Photo branch ───────────────────────────────────────────────────────
+        if media_type == 'photo' and piece_path:
+            print(f"  [COMPONENT {component_id}] PHOTO component — running photo pipeline")
+            try:
+                paragraph = process_photo_piece(
+                    tier='dwarf_queen',
+                    component_id=component_id,
+                    job_id=job_id,
+                    piece_url=piece_path,
+                    vision_model='gemma3:4b',
+                    text_model='phi4-mini:3.8b',
+                    resize_spec=(512, 512),
+                    client=self.kb,
+                    ollama_url=self.ollama_url,
+                )
+            except Exception as e:
+                print(f"  [COMPONENT {component_id}] [ERROR] Photo pipeline: {e}")
+                return
+            processing_time = time.time() - start_time
+            try:
+                self.kb.post_component_result(component_id, paragraph, processing_time)
+                print(f"  [COMPONENT {component_id}] PHOTO COMPLETE in "
+                      f"{processing_time:.1f}s ({len(paragraph)} chars)")
+            except Exception as e:
+                print(f"  [COMPONENT {component_id}] [ERROR] Post result: {e}")
+            return
+        # ──────────────────────────────────────────────────────────────────────
 
         # Step 2: Split into subtasks using local Ollama
         print(f"  [COMPONENT {component_id}] Splitting into subtasks "

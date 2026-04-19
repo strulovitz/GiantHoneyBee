@@ -31,6 +31,7 @@ sys.path.insert(0, HONEYCOMB_PATH)
 
 from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
+from photo_tier import process_photo_piece
 
 
 def print_banner(text: str, char: str = "="):
@@ -66,6 +67,8 @@ class RajaBee:
         self.subordinates = []   # list of subordinate dicts from KillerBee
         self.fractions = []      # list of {member_id, name, fraction} dicts
         self._last_known_capacities = {}  # member_id -> capacity (for change detection)
+
+        self.ollama_url = ollama_url
 
         # KillerBee API client (all communication goes through here)
         self.kb = KillerBeeClient(server_url, username, password)
@@ -419,8 +422,13 @@ class RajaBee:
                     for job in jobs:
                         job_id = job.get("id") or job.get("job_id")
                         task = job.get("task") or job.get("prompt", "")
+                        media_type = job.get("media_type")
+                        media_url = job.get("media_url")
                         print(f"\n  [JOB {job_id}] Received: {task[:80]}...")
-                        self._process_job(job_id, task)
+                        if media_type:
+                            print(f"  [JOB {job_id}] media_type={media_type}")
+                        self._process_job(job_id, task, media_type=media_type,
+                                          media_url=media_url)
                 else:
                     print(f"  Polling... no pending jobs. "
                           f"({len(self.subordinates)} subordinates, "
@@ -430,10 +438,41 @@ class RajaBee:
 
             time.sleep(self.poll_interval)
 
-    def _process_job(self, job_id: int, task: str):
-        """Process a single job: split, wait for results, combine."""
+    def _process_job(self, job_id: int, task: str, media_type: str = None,
+                     media_url: str = None):
+        """Process a single job: photo branch or existing text branch."""
         total_start = time.time()
 
+        # ── Photo branch ───────────────────────────────────────────────────────
+        if media_type == 'photo' and media_url:
+            print(f"  [JOB {job_id}] PHOTO job detected — running photo pipeline")
+            print(f"  [JOB {job_id}] media_url: {media_url}")
+            try:
+                honey = process_photo_piece(
+                    tier='raja',
+                    component_id=None,
+                    job_id=job_id,
+                    piece_url=media_url,
+                    vision_model='qwen3.5:9b',
+                    text_model='qwen3:14b',
+                    resize_spec=(1024, 1024),
+                    client=self.kb,
+                    ollama_url=self.ollama_url,
+                )
+            except Exception as e:
+                print(f"  [JOB {job_id}] [ERROR] Photo pipeline failed: {e}")
+                return
+            total_time = time.time() - total_start
+            try:
+                self.kb.post_job_result(job_id, honey, total_time)
+                print(f"  [JOB {job_id}] PHOTO COMPLETE! Royal Honey delivered "
+                      f"in {total_time:.1f}s ({len(honey)} chars)")
+            except Exception as e:
+                print(f"  [JOB {job_id}] [ERROR] Failed to post photo result: {e}")
+            return
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── Text branch (existing Phase 3 logic, unchanged) ───────────────────
         # Step 1: Use local Ollama to split the task into components
         print(f"  [JOB {job_id}] Splitting task into components...")
         components = self._split_task(task)

@@ -32,6 +32,7 @@ sys.path.insert(0, HONEYCOMB_PATH)
 
 from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
+from photo_tier import process_photo_piece
 
 
 def print_banner(text: str, char: str = "="):
@@ -61,6 +62,7 @@ class WorkerClient:
         self.member_id = None
         self.tasks_completed = 0
 
+        self.ollama_url = ollama_url
         self.kb = KillerBeeClient(server_url, username, password)
         self.ai = OllamaClient(base_url=ollama_url)
 
@@ -113,12 +115,17 @@ class WorkerClient:
                         task = task_item.get("task", "")
                         original_task = task_item.get("original_task", task)
                         comp_type = task_item.get("component_type", "subtask")
+                        piece_path = task_item.get("piece_path")
+                        media_type = task_item.get("media_type")
                         print(f"\n  [TASK {t_id}] Assigned to me ({comp_type}):")
                         print(f"  FULL QUESTION:")
                         print(f"  ---BEGIN---")
                         print(f"  {task}")
                         print(f"  ---END---")
-                        self._process_subtask(t_id, task, original_task)
+                        self._process_subtask(t_id, task, original_task,
+                                              piece_path=piece_path,
+                                              media_type=media_type,
+                                              job_id=task_item.get("job_id"))
                         found_work = True
                         break  # One at a time
 
@@ -130,12 +137,17 @@ class WorkerClient:
                             st_id = subtask.get("id") or subtask.get("component_id")
                             task = subtask.get("task", "")
                             original_task = subtask.get("original_task", task)
+                            piece_path = subtask.get("piece_path")
+                            media_type = subtask.get("media_type")
 
                             try:
                                 self.kb.claim_component(st_id, self.member_id)
                                 print(f"\n  [SUBTASK {st_id}] Claimed: "
                                       f"{task[:80]}...")
-                                self._process_subtask(st_id, task, original_task)
+                                self._process_subtask(st_id, task, original_task,
+                                                      piece_path=piece_path,
+                                                      media_type=media_type,
+                                                      job_id=subtask.get("job_id"))
                                 found_work = True
                                 break  # One at a time
                             except Exception as e:
@@ -151,11 +163,45 @@ class WorkerClient:
 
             time.sleep(self.poll_interval)
 
-    def _process_subtask(self, subtask_id: int, task: str, original_task: str = ""):
-        """Process a single subtask using local Ollama."""
+    def _process_subtask(self, subtask_id: int, task: str,
+                         original_task: str = "", piece_path: str = None,
+                         media_type: str = None, job_id: int = None):
+        """Process a single subtask: photo tile branch or text branch."""
         start_time = time.time()
         original_task = original_task or task
 
+        # ── Photo branch ───────────────────────────────────────────────────────
+        if media_type == 'photo' and piece_path:
+            print(f"  [SUBTASK {subtask_id}] PHOTO tile — running vision with qwen3.5:0.8b")
+            try:
+                gestalt = process_photo_piece(
+                    tier='worker',
+                    component_id=subtask_id,
+                    job_id=job_id,
+                    piece_url=piece_path,
+                    vision_model='qwen3.5:0.8b',
+                    text_model=None,
+                    resize_spec=(384, 384),
+                    client=self.kb,
+                    ollama_url=self.ollama_url,
+                )
+            except Exception as e:
+                print(f"  [SUBTASK {subtask_id}] [ERROR] Photo vision: {e}")
+                return
+            processing_time = time.time() - start_time
+            print(f"  [SUBTASK {subtask_id}] PHOTO TILE RESULT: {gestalt[:120]}...")
+            try:
+                self.kb.post_component_result(subtask_id, gestalt, processing_time)
+                self.tasks_completed += 1
+                print(f"  [SUBTASK {subtask_id}] PHOTO TILE COMPLETE in "
+                      f"{processing_time:.1f}s "
+                      f"(total completed: {self.tasks_completed})")
+            except Exception as e:
+                print(f"  [SUBTASK {subtask_id}] [ERROR] Failed to post result: {e}")
+            return
+        # ──────────────────────────────────────────────────────────────────────
+
+        # ── Text branch (existing Phase 3 logic, unchanged) ───────────────────
         print(f"  [SUBTASK {subtask_id}] Processing with {self.model_name}...")
 
         # Use local Ollama to process the subtask

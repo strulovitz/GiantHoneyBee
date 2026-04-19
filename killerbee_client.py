@@ -8,6 +8,7 @@ to communicate through the central KillerBee server.
 No direct HTTP between bees. Everything goes through KillerBee.
 """
 
+import io
 import time
 import requests
 
@@ -197,6 +198,198 @@ class KillerBeeClient:
         """Get subordinates with their fractions for splitting work."""
         data = self._request("GET", f"/api/member/{member_id}/fractions")
         return data
+
+    # ── Multimedia ────────────────────────────────────────────────────
+
+    def get_job_media(self, job_id: int) -> dict:
+        """Return media_type and media_url for a job (may be None for text jobs)."""
+        # Pending-jobs endpoint includes media fields; fetch status via job status
+        # API. There's no /api/job/<id>/status endpoint, so we fetch via the
+        # component-status approach — but for the job itself we just need the
+        # two media fields which the pending jobs list already carries. Callers
+        # who hold a job dict (from get_pending_jobs) should read media_type /
+        # media_url directly from that dict. This helper is for callers who
+        # only know the job_id and need to look it up separately.
+        data = self._request("GET", f"/api/job/{job_id}/status")
+        return {
+            "media_type": data.get("media_type"),
+            "media_url": data.get("media_url"),
+        }
+
+    def download_piece(self, relative_url: str) -> bytes:
+        """Download a media piece from the server's /uploads/ endpoint.
+
+        relative_url is a server-relative path such as
+        'photo/swarmjob_42/cut_by_raja/grid_a_q1.jpg'.
+        Leading slashes are stripped.
+        No auth required on /uploads/ (served as static-like files).
+        """
+        relative_url = relative_url.lstrip('/')
+        url = f"{self.server_url}/uploads/{relative_url}"
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                resp = requests.get(url, timeout=60)
+                if resp.status_code >= 400:
+                    raise Exception(
+                        f"HTTP {resp.status_code} downloading {url}: {resp.text[:200]}"
+                    )
+                return resp.content
+            except requests.exceptions.ConnectionError as e:
+                if attempt < self.max_retries:
+                    print(f"  [RETRY {attempt}/{self.max_retries}] Download error: {e}")
+                    time.sleep(self.retry_delay * attempt)
+                else:
+                    raise Exception(f"download_piece failed after {self.max_retries} attempts: {e}")
+            except requests.exceptions.Timeout as e:
+                if attempt < self.max_retries:
+                    print(f"  [RETRY {attempt}/{self.max_retries}] Download timeout: {e}")
+                    time.sleep(self.retry_delay * attempt)
+                else:
+                    raise Exception(f"download_piece timed out after {self.max_retries} attempts: {e}")
+        raise Exception("download_piece: unexpected exit from retry loop")
+
+    def upload_piece(self, component_id: int, piece_path: str,
+                     image_bytes: bytes) -> dict:
+        """Upload a cut piece (photo tile) to the server.
+
+        Multipart POST to /api/component/<id>/upload-piece.
+        Requires Bearer auth.
+        """
+        url = self._url(f"/api/component/{component_id}/upload-piece")
+        headers = {}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        files = {
+            "piece": (piece_path.split("/")[-1], io.BytesIO(image_bytes), "image/jpeg"),
+        }
+        data = {"piece_path": piece_path}
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                resp = requests.post(url, headers=headers, files=files, data=data,
+                                     timeout=60)
+                if resp.status_code >= 400:
+                    raise Exception(
+                        f"HTTP {resp.status_code} uploading piece to component "
+                        f"{component_id}: {resp.text[:200]}"
+                    )
+                return resp.json()
+            except requests.exceptions.ConnectionError as e:
+                if attempt < self.max_retries:
+                    print(f"  [RETRY {attempt}/{self.max_retries}] Upload error: {e}")
+                    time.sleep(self.retry_delay * attempt)
+                else:
+                    raise
+            except requests.exceptions.Timeout as e:
+                if attempt < self.max_retries:
+                    print(f"  [RETRY {attempt}/{self.max_retries}] Upload timeout: {e}")
+                    time.sleep(self.retry_delay * attempt)
+                else:
+                    raise
+
+    def upload_piece_with_audio(self, component_id: int, piece_path: str,
+                                video_bytes: bytes, audio_piece_path: str,
+                                audio_bytes: bytes) -> dict:
+        """Upload a video piece with its matching audio slice.
+
+        Used for video components. Both video and audio bytes are uploaded
+        in a single multipart POST.
+        """
+        url = self._url(f"/api/component/{component_id}/upload-piece")
+        headers = {}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        files = {
+            "piece": (piece_path.split("/")[-1], io.BytesIO(video_bytes), "video/mp4"),
+            "audio_piece": (audio_piece_path.split("/")[-1], io.BytesIO(audio_bytes), "audio/mpeg"),
+        }
+        data = {
+            "piece_path": piece_path,
+            "audio_piece_path": audio_piece_path,
+        }
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                resp = requests.post(url, headers=headers, files=files, data=data,
+                                     timeout=120)
+                if resp.status_code >= 400:
+                    raise Exception(
+                        f"HTTP {resp.status_code} uploading piece+audio to component "
+                        f"{component_id}: {resp.text[:200]}"
+                    )
+                return resp.json()
+            except requests.exceptions.ConnectionError as e:
+                if attempt < self.max_retries:
+                    print(f"  [RETRY {attempt}/{self.max_retries}] Upload+audio error: {e}")
+                    time.sleep(self.retry_delay * attempt)
+                else:
+                    raise
+            except requests.exceptions.Timeout as e:
+                if attempt < self.max_retries:
+                    print(f"  [RETRY {attempt}/{self.max_retries}] Upload+audio timeout: {e}")
+                    time.sleep(self.retry_delay * attempt)
+                else:
+                    raise
+
+    def create_child_component(self, parent_id: int | None, job_id: int,
+                               task_description: str, level: int,
+                               piece_path: str,
+                               component_type: str = "component") -> int:
+        """Create a single child JobComponent and return its id.
+
+        Uses the POST /api/component/create-child endpoint (added in
+        commit for multimedia support). Auth required.
+        """
+        data = self._request("POST", "/api/component/create-child", {
+            "parent_id": parent_id,
+            "job_id": job_id,
+            "task_description": task_description,
+            "level": level,
+            "piece_path": piece_path,
+            "component_type": component_type,
+        })
+        comp_id = data.get("component_id")
+        if comp_id is None:
+            raise Exception(f"create_child_component: no component_id in response: {data}")
+        return comp_id
+
+    def get_children_results(self, parent_component_id: int,
+                             timeout_sec: int = 1800,
+                             poll_interval: int = 5) -> list:
+        """Poll until all children of parent_component_id have results.
+
+        Returns list of (piece_stem, result_text) tuples — 8 entries for a
+        full Grid A + Grid B cut. Raises TimeoutError if children do not
+        complete within timeout_sec.
+        """
+        waited = 0
+        while waited < timeout_sec:
+            time.sleep(poll_interval)
+            waited += poll_interval
+            try:
+                children = self.get_children(parent_component_id)
+                if not children:
+                    continue
+                all_done = True
+                results = []
+                for child in children:
+                    if child.get("result"):
+                        piece_path = child.get("task", "")
+                        # Use task_description as the piece stem (it holds the path)
+                        import os
+                        stem = os.path.splitext(os.path.basename(piece_path))[0] if piece_path else f"child_{child['id']}"
+                        results.append((stem, child["result"]))
+                    else:
+                        all_done = False
+                if all_done and results:
+                    return results
+                print(f"  [get_children_results parent={parent_component_id}] "
+                      f"{len(results)}/{len(children)} done ({waited}s)", end="\r")
+            except Exception as e:
+                print(f"  [get_children_results] poll error: {e}")
+
+        raise TimeoutError(
+            f"get_children_results: parent={parent_component_id} "
+            f"timed out after {timeout_sec}s"
+        )
 
     # ── Heartbeat ─────────────────────────────────────────────────────
 
