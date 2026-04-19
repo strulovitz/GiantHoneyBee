@@ -364,12 +364,19 @@ class KillerBeeClient:
     def get_children_results(self, parent_component_id: int,
                              timeout_sec: int = 1800,
                              poll_interval: int = 5) -> list:
-        """Poll until all children of parent_component_id have results.
+        """Poll until all children of parent_component_id are completed.
 
         Returns list of (piece_stem, result_text) tuples — 8 entries for a
         full Grid A + Grid B cut. Raises TimeoutError if children do not
         complete within timeout_sec.
+
+        Done condition: child['status'] == 'completed', regardless of whether
+        result is empty. If the result is empty (e.g. vision model timed out
+        and returned nothing), we use the placeholder '[gestalt returned empty]'
+        so the integrator never receives None and the pipeline does not stall
+        waiting for a result that will never arrive.
         """
+        import os as _os
         waited = 0
         while waited < timeout_sec:
             time.sleep(poll_interval)
@@ -381,12 +388,12 @@ class KillerBeeClient:
                 all_done = True
                 results = []
                 for child in children:
-                    if child.get("result"):
+                    if child.get("status") == "completed":
                         piece_path = child.get("task", "")
-                        # Use task_description as the piece stem (it holds the path)
-                        import os
-                        stem = os.path.splitext(os.path.basename(piece_path))[0] if piece_path else f"child_{child['id']}"
-                        results.append((stem, child["result"]))
+                        stem = (_os.path.splitext(_os.path.basename(piece_path))[0]
+                                if piece_path else f"child_{child['id']}")
+                        result_text = child.get("result") or "[gestalt returned empty]"
+                        results.append((stem, result_text))
                     else:
                         all_done = False
                 if all_done and results:

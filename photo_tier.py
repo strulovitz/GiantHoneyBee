@@ -341,8 +341,12 @@ def process_photo_piece(
             for name, cid in remaining:
                 try:
                     comp_resp = client._request("GET", f"/api/component/{cid}/status")
-                    if comp_resp.get("status") == "completed" and comp_resp.get("result"):
-                        child_results.append((name, comp_resp["result"]))
+                    # Done when status == 'completed', regardless of whether result
+                    # is empty. Empty result uses a placeholder so the integrator
+                    # never receives None and the pipeline does not stall.
+                    if comp_resp.get("status") == "completed":
+                        result_text = comp_resp.get("result") or "[gestalt returned empty]"
+                        child_results.append((name, result_text))
                     else:
                         still_waiting.append((name, cid))
                 except Exception as e:

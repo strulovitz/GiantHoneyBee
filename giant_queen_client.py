@@ -620,7 +620,12 @@ Component to split: {task}"""
 
     def _wait_for_children(self, component_id: int,
                            split_result: dict) -> list:
-        """Poll until all children of this component have results."""
+        """Poll until all children of this component are completed.
+
+        Done condition: child['status'] == 'completed', regardless of whether
+        result is empty. If result is empty we substitute '[gestalt returned empty]'
+        so _combine_results never receives None and the pipeline does not stall.
+        """
         child_ids = split_result.get("child_ids",
                                      split_result.get("component_ids", []))
         max_wait = 3600
@@ -639,7 +644,11 @@ Component to split: {task}"""
                 completed_results = []
 
                 for child in children:
-                    if child.get("result"):
+                    if child.get("status") == "completed":
+                        # Ensure result is never None/empty for the integrator
+                        if not child.get("result"):
+                            child = dict(child)
+                            child["result"] = "[gestalt returned empty]"
                         completed_results.append(child)
                     else:
                         all_done = False
