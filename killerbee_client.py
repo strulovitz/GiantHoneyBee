@@ -408,6 +408,17 @@ class KillerBeeClient:
             f"timed out after {timeout_sec}s"
         )
 
+    def update_job_status(self, job_id: int, status: str) -> dict:
+        """Update the status of a SwarmJob (e.g. 'splitting', 'processing').
+
+        Hits POST /api/job/<id>/update with {"status": status}.
+        Used by RajaBee to mark a job as claimed so the poll loop does not
+        re-pick the same job on the next iteration.
+        """
+        return self._request("POST", f"/api/job/{job_id}/update", {
+            "status": status
+        })
+
     # ── Heartbeat ─────────────────────────────────────────────────────
 
     def heartbeat(self, swarm_id: int, member_id: int,

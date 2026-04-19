@@ -454,6 +454,16 @@ class RajaBee:
         """Process a single job: photo branch or existing text branch."""
         total_start = time.time()
 
+        # Mark the job as 'splitting' immediately so the poll loop does not
+        # re-pick it on the next iteration (it stays 'pending' otherwise).
+        # TODO: if Raja crashes here the job is left in 'splitting' limbo —
+        #       a future recovery pass can reset it to 'pending'.
+        try:
+            self.kb.update_job_status(job_id, 'splitting')
+            print(f"  [JOB {job_id}] Marked as 'splitting'")
+        except Exception as e:
+            print(f"  [JOB {job_id}] [WARN] Could not mark as splitting: {e}")
+
         # ── Photo branch ───────────────────────────────────────────────────────
         if media_type == 'photo' and media_url:
             print(f"  [JOB {job_id}] PHOTO job detected — running photo pipeline")
