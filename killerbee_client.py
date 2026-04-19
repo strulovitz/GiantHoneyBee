@@ -153,9 +153,19 @@ class KillerBeeClient:
         data = self._request("GET", f"/api/swarm/{swarm_id}/subtasks/available")
         return data if isinstance(data, list) else data.get("subtasks", [])
 
-    def get_available_components(self, swarm_id: int) -> list:
-        """Get unclaimed components available for GiantQueens/DwarfQueens."""
-        data = self._request("GET", f"/api/swarm/{swarm_id}/components/available")
+    def get_available_components(self, swarm_id: int,
+                                    level: int = None) -> list:
+        """Get unclaimed components available for GiantQueens/DwarfQueens.
+
+        Pass level=0 for GiantQueens (claim Raja's level-0 components),
+        level=1 for DwarfQueens (claim GQ's level-1 components).
+        Omit level to receive all levels (backward-compatible).
+        """
+        params = {}
+        if level is not None:
+            params['level'] = level
+        data = self._request("GET", f"/api/swarm/{swarm_id}/components/available",
+                             params=params)
         return data if isinstance(data, list) else data.get("components", [])
 
     # ── Buzzing (Performance Calibration) ────────────────────────────

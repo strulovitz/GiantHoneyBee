@@ -424,8 +424,12 @@ class DwarfQueenClient:
                                 job_id=component.get("job_id"),
                             )
                 else:
-                    # Check for unclaimed components we can claim
-                    available = self.kb.get_available_components(self.swarm_id)
+                    # Check for unclaimed level-1 components we can claim.
+                    # DwarfQueens consume level-1 components (produced by GiantQueens).
+                    # Passing level=1 prevents claiming level-0 components that belong
+                    # to GiantQueens, which caused tier-routing bugs.
+                    available = self.kb.get_available_components(self.swarm_id,
+                                                                 level=1)
                     if available:
                         for component in available:
                             comp_id = component.get("id")

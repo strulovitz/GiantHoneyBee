@@ -424,8 +424,12 @@ class GiantQueenClient:
                                 job_id=component.get("job_id"),
                             )
                 else:
-                    # Second: check for unclaimed components I can claim
-                    available = self.kb.get_available_components(self.swarm_id)
+                    # Second: check for unclaimed level-0 components I can claim.
+                    # GiantQueens consume level-0 components (produced by RajaBee).
+                    # Passing level=0 prevents claiming level-1 or level-2 components
+                    # that belong to lower tiers, which caused tier-routing bugs.
+                    available = self.kb.get_available_components(self.swarm_id,
+                                                                 level=0)
                     if available:
                         for component in available:
                             comp_id = component.get("id")
