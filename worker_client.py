@@ -33,6 +33,7 @@ sys.path.insert(0, HONEYCOMB_PATH)
 from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
 from photo_tier import process_photo_piece
+from tier_timeouts import TIMEOUTS, CIRCUIT_BREAKER
 
 
 def print_banner(text: str, char: str = "="):
@@ -169,6 +170,7 @@ class WorkerClient:
         """Process a single subtask: photo tile branch or text branch."""
         start_time = time.time()
         original_task = original_task or task
+        _cb_ceiling = CIRCUIT_BREAKER["worker"]  # 360s wall-clock ceiling
 
         # ── Photo branch ───────────────────────────────────────────────────────
         if media_type == 'photo' and piece_path:
@@ -201,6 +203,14 @@ class WorkerClient:
             return
         # ──────────────────────────────────────────────────────────────────────
 
+        # ── Circuit breaker: wall-clock ceiling check ──────────────────────────
+        elapsed = time.time() - start_time
+        if elapsed > _cb_ceiling:
+            print(f"  [CIRCUIT BREAKER] subtask {subtask_id} exceeded "
+                  f"{_cb_ceiling}s wall clock ({elapsed:.0f}s elapsed) — releasing")
+            return
+        # ──────────────────────────────────────────────────────────────────────
+
         # ── Text branch (existing Phase 3 logic, unchanged) ───────────────────
         print(f"  [SUBTASK {subtask_id}] Processing with {self.model_name}...")
 
@@ -217,7 +227,8 @@ Context: this is part of a larger question: "{original_task}" """
         result = self.ai.ask(
             prompt=prompt,
             model=self.model_name,
-            temperature=0.7
+            temperature=0.7,
+            timeout_sec=TIMEOUTS["text_integration"],
         )
 
         processing_time = time.time() - start_time

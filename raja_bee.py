@@ -32,6 +32,7 @@ sys.path.insert(0, HONEYCOMB_PATH)
 from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
 from photo_tier import process_photo_piece
+from tier_timeouts import TIMEOUTS, CIRCUIT_BREAKER
 
 
 def print_banner(text: str, char: str = "="):
@@ -225,7 +226,8 @@ class RajaBee:
                         "history, science, economics, or geopolitics. "
                         "Just output the question, nothing else."),
                 model=self.model_name,
-                temperature=0.9
+                temperature=0.9,
+                timeout_sec=TIMEOUTS["text_calibration"],
             ).strip()
             cal_questions.append(q)
             print(f"  [BUZZING] Q{i+1}: {q[:120]}...")
@@ -348,7 +350,8 @@ class RajaBee:
                 quality_text = self.ai.ask(
                     prompt=quality_prompt,
                     model=self.model_name,
-                    temperature=0.1
+                    temperature=0.1,
+                    timeout_sec=TIMEOUTS["text_calibration"],
                 ).strip()
                 print(f"  [BUZZING] JUDGE RAW RESPONSE: \"{quality_text}\"")
                 try:
@@ -547,7 +550,8 @@ Task: {task}"""
         raw = self.ai.ask(
             prompt=prompt,
             model=self.model_name,
-            temperature=0.3
+            temperature=0.3,
+            timeout_sec=TIMEOUTS["text_calibration"],
         )
 
         print(f"  [SPLIT] RAW LLM OUTPUT:")
@@ -645,7 +649,8 @@ Combine into one coherent answer. Remove redundancy, keep all important details.
         return self.ai.ask(
             prompt=prompt,
             model=self.model_name,
-            temperature=0.5
+            temperature=0.5,
+            timeout_sec=TIMEOUTS["text_integration"],
         )
 
 

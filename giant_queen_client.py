@@ -35,6 +35,7 @@ sys.path.insert(0, HONEYCOMB_PATH)
 from ollama_client import OllamaClient
 from killerbee_client import KillerBeeClient
 from photo_tier import process_photo_piece
+from tier_timeouts import TIMEOUTS, CIRCUIT_BREAKER
 
 
 def print_banner(text: str, char: str = "="):
@@ -211,7 +212,8 @@ class GiantQueenClient:
                         "history, science, economics, or geopolitics. "
                         "Just output the question, nothing else."),
                 model=self.model_name,
-                temperature=0.9
+                temperature=0.9,
+                timeout_sec=TIMEOUTS["text_calibration"],
             ).strip()
             cal_questions.append(q)
             print(f"  [BUZZING] Q{i+1}: {q[:120]}...")
@@ -334,7 +336,8 @@ class GiantQueenClient:
                 quality_text = self.ai.ask(
                     prompt=quality_prompt,
                     model=self.model_name,
-                    temperature=0.1
+                    temperature=0.1,
+                    timeout_sec=TIMEOUTS["text_calibration"],
                 ).strip()
                 print(f"  [BUZZING] JUDGE RAW RESPONSE: \"{quality_text}\"")
                 try:
@@ -458,6 +461,7 @@ class GiantQueenClient:
         """Process a component: photo branch or existing text branch."""
         start_time = time.time()
         original_task = original_task or task
+        _cb_ceiling = CIRCUIT_BREAKER["giant_queen"]  # 540s wall-clock ceiling
 
         # Step 1: Claim the component
         try:
@@ -494,6 +498,14 @@ class GiantQueenClient:
             return
         # ──────────────────────────────────────────────────────────────────────
 
+        # ── Circuit breaker: wall-clock ceiling check ──────────────────────────
+        elapsed = time.time() - start_time
+        if elapsed > _cb_ceiling:
+            print(f"  [CIRCUIT BREAKER] component {component_id} exceeded "
+                  f"{_cb_ceiling}s wall clock ({elapsed:.0f}s elapsed) — releasing")
+            return
+        # ──────────────────────────────────────────────────────────────────────
+
         # Step 2: Split into sub-components using local Ollama
         print(f"  [COMPONENT {component_id}] Splitting into sub-components...")
         sub_components = self._split_component(task, original_task)
@@ -521,6 +533,14 @@ class GiantQueenClient:
             print(f"  [COMPONENT {component_id}] [ERROR] "
                   f"No child results received")
             return
+
+        # ── Circuit breaker: check before expensive combine ────────────────────
+        elapsed = time.time() - start_time
+        if elapsed > _cb_ceiling:
+            print(f"  [CIRCUIT BREAKER] component {component_id} exceeded "
+                  f"{_cb_ceiling}s wall clock ({elapsed:.0f}s elapsed) — releasing")
+            return
+        # ──────────────────────────────────────────────────────────────────────
 
         # Step 5: Combine results
         print(f"  [COMPONENT {component_id}] Combining "
@@ -577,7 +597,8 @@ Component to split: {task}"""
         raw = self.ai.ask(
             prompt=prompt,
             model=self.model_name,
-            temperature=0.3
+            temperature=0.3,
+            timeout_sec=TIMEOUTS["text_calibration"],
         )
 
         from smart_splitter import smart_split
@@ -660,7 +681,8 @@ Combine into one coherent answer. Remove redundancy, keep all important details.
         return self.ai.ask(
             prompt=prompt,
             model=self.model_name,
-            temperature=0.5
+            temperature=0.5,
+            timeout_sec=TIMEOUTS["text_integration"],
         )
 
 

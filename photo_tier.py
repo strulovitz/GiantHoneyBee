@@ -8,10 +8,17 @@ integration.
 
 No shared-filesystem shortcuts — every piece crosses HTTP through the
 KillerBee API as required by CLAUDE.md Rule #1 and the plan Section 10.
+
+Timeout discipline (2026-04-19):
+  All Ollama calls use tight per-call timeouts from tier_timeouts.TIMEOUTS.
+  The wait_for_children poll loop uses 1800s (waiting for 8 distributed
+  machines to finish is fundamentally different from a single inference
+  call — that ceiling is NOT tightened here).
 """
 
 import io
 import os
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +27,17 @@ from PIL import Image
 
 from killerbee_client import KillerBeeClient
 from photo_cut import cut_grid_ab_spatial, pil_to_jpeg_bytes
+
+# tier_timeouts lives in HoneycombOfAI which is already on sys.path
+# (every tier client inserts it). Import defensively.
+try:
+    from tier_timeouts import TIMEOUTS
+except ImportError:
+    # Fallback in case sys.path isn't set up yet
+    _HONEYCOMB = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              '..', 'HoneycombOfAI')
+    sys.path.insert(0, _HONEYCOMB)
+    from tier_timeouts import TIMEOUTS
 
 
 # ── Tier short-name map ────────────────────────────────────────────────────────
@@ -46,6 +64,19 @@ _CHILD_TYPE = {
     "dwarf_queen": "subtask",
 }
 
+# ── Vision timeout per tier (used in _run_ollama_vision) ──────────────────────
+
+_VISION_TIMEOUT = {
+    "raja":        TIMEOUTS["photo_raja_gestalt"],   # 300s
+    "giant_queen": TIMEOUTS["photo_gq_gestalt"],     # 180s
+    "dwarf_queen": TIMEOUTS["photo_dq_gestalt"],     # 120s
+    "worker":      TIMEOUTS["photo_worker_tile"],    # 120s
+}
+
+# ── Text integration timeout (same for all non-leaf tiers) ────────────────────
+
+_TEXT_TIMEOUT = TIMEOUTS["text_integration"]  # 120s
+
 
 def _needs_no_think(model: str) -> bool:
     """Return True if this model requires the /no_think prefix.
@@ -59,14 +90,19 @@ def _needs_no_think(model: str) -> bool:
 
 
 def _run_ollama_vision(model: str, image_bytes: bytes,
-                       ollama_url: str = "http://localhost:11434") -> str:
+                       ollama_url: str = "http://localhost:11434",
+                       timeout_sec: float = 120.0) -> str:
     """Run an Ollama vision model on image_bytes. Returns the description text.
 
     Prepends /no_think for qwen3 family models. Falls back to thinking field
     if response is empty (belt-and-suspenders per plan Section 8).
     num_predict >= 1024 per plan Section 8.
+
+    timeout_sec is enforced at the httpx level — the connection is killed
+    if inference exceeds the deadline.
     """
-    client = ollama.Client(host=ollama_url)
+    # Fresh client per call with the correct timeout (httpx-backed)
+    client = ollama.Client(host=ollama_url, timeout=timeout_sec)
     prompt = "/no_think Describe in detail what you see in this image." \
         if _needs_no_think(model) else \
         "Describe in detail what you see in this image."
@@ -89,9 +125,14 @@ def _run_ollama_vision(model: str, image_bytes: bytes,
 
 
 def _run_ollama_text(model: str, prompt: str,
-                     ollama_url: str = "http://localhost:11434") -> str:
-    """Run an Ollama text model. Returns the response text."""
-    client = ollama.Client(host=ollama_url)
+                     ollama_url: str = "http://localhost:11434",
+                     timeout_sec: float = 120.0) -> str:
+    """Run an Ollama text model. Returns the response text.
+
+    timeout_sec is enforced at the httpx level.
+    """
+    # Fresh client per call with the correct timeout (httpx-backed)
+    client = ollama.Client(host=ollama_url, timeout=timeout_sec)
     # qwen3 text models also benefit from /no_think to avoid reasoning tokens
     if _needs_no_think(model):
         prompt = "/no_think " + prompt
@@ -207,9 +248,20 @@ def process_photo_piece(
         Authenticated KillerBeeClient instance.
     ollama_url : str
         Ollama API base URL.
+
+    Timeout discipline:
+        - Gestalt vision call: TIMEOUTS["photo_<tier>_gestalt"] seconds
+          (300s for Raja, 180s for GQ, 120s for DQ/Worker).
+        - Text integration call: TIMEOUTS["text_integration"] = 120s.
+        - wait_for_children poll loop: 1800s ceiling (waiting for 8
+          distributed machines; this is a poll loop, not an Ollama call,
+          and is intentionally not tightened here).
     """
     if tier not in ("raja", "giant_queen", "dwarf_queen", "worker"):
         raise ValueError(f"Unknown tier: {tier!r}")
+
+    vision_timeout = _VISION_TIMEOUT[tier]
+    text_timeout = _TEXT_TIMEOUT
 
     print(f"  [PHOTO/{tier.upper()}] Downloading piece: {piece_url}")
     raw_bytes = client.download_piece(piece_url)
@@ -220,8 +272,9 @@ def process_photo_piece(
     gestalt_img = _resize_image(img.copy(), resize_spec)
     gestalt_bytes = pil_to_jpeg_bytes(gestalt_img)
     print(f"  [PHOTO/{tier.upper()}] Running gestalt vision with {vision_model} "
-          f"(resized to {gestalt_img.size})...")
-    gestalt = _run_ollama_vision(vision_model, gestalt_bytes, ollama_url)
+          f"(resized to {gestalt_img.size}, timeout={vision_timeout}s)...")
+    gestalt = _run_ollama_vision(vision_model, gestalt_bytes, ollama_url,
+                                 timeout_sec=vision_timeout)
     print(f"  [PHOTO/{tier.upper()}] Gestalt ({len(gestalt)} chars): {gestalt[:120]}...")
 
     # ── Leaf (Worker): return gestalt directly ─────────────────────────────────
@@ -263,9 +316,12 @@ def process_photo_piece(
 
         child_ids.append(child_id)
 
-    # Wait for all 8 children to complete
+    # Wait for all 8 children to complete.
+    # Poll ceiling = 1800s: this waits for 8 separate machines over the network.
+    # This is a poll loop, NOT an Ollama inference call — intentionally not
+    # tightened to the per-call Ollama timeouts.
     print(f"  [PHOTO/{tier.upper()}] Waiting for {len(child_ids)} children "
-          f"(component_id={component_id})...")
+          f"(component_id={component_id}, poll ceiling=1800s)...")
 
     # get_children_results polls on parent_component_id
     # For Raja (component_id=None), we can't poll by parent_id=None directly.
@@ -308,10 +364,11 @@ def process_photo_piece(
         )
 
     print(f"\n  [PHOTO/{tier.upper()}] All {len(child_results)} children done. "
-          f"Running text integration with {text_model}...")
+          f"Running text integration with {text_model} (timeout={text_timeout}s)...")
 
     integration_prompt = _build_integration_prompt(gestalt, child_results)
-    paragraph = _run_ollama_text(text_model, integration_prompt, ollama_url)
+    paragraph = _run_ollama_text(text_model, integration_prompt, ollama_url,
+                                 timeout_sec=text_timeout)
     print(f"  [PHOTO/{tier.upper()}] Integration paragraph "
           f"({len(paragraph)} chars): {paragraph[:120]}...")
 
